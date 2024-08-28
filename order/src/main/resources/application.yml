@@ -1,0 +1,35 @@
+spring:
+  application:
+    name: order
+  datasource:
+    driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+    url: jdbc:sqlserver://localhost:60387;databaseName=BizwebStores;encrypt=true;trustServerCertificate=true
+    username: sa
+    password: 123456
+  jpa:
+    show-sql: true
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        format_sql: true
+      naming:
+        physical-strategy: org.hibernate.boot.model.naming.CamelCaseToUnderscoresNamingStrategy
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+  redis-order-cache:
+    port: 6379
+    host: localhost
+    timeout: 2000
+    database: 0
+    enable: true
+    timeevict: 48
+    pool:
+      maxIdle: 50
+      minIdle: 10
+      maxTotal: 50
+#server:
+#  port:
+#logging:
+#  level:
+#    org.example.order.order.infrastructure.configuration.feign.WebClient: DEBUG

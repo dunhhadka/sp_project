@@ -1,0 +1,155 @@
+[
+  {
+    "id": 1,
+    "name": "Việt Nam Đồng (VND)",
+    "code": "VND",
+    "culture_code": "vi-VN",
+    "symbol": "₫",
+    "symbol_position": false,
+    "currency_decimal_digits": 0
+  },
+  {
+    "id": 2,
+    "name": "United States Dollars (USD)",
+    "code": "USD",
+    "culture_code": "en-US",
+    "symbol": "$",
+    "symbol_position": true,
+    "currency_decimal_digits": 2
+  },
+  {
+    "id": 3,
+    "name": "Euro (EUR)",
+    "code": "EUR",
+    "culture_code": "en-IE",
+    "symbol": "€",
+    "symbol_position": true,
+    "currency_decimal_digits": 2
+  },
+  {
+    "id": 4,
+    "name": "United Kingdom Pounds (GBP)",
+    "code": "GBP",
+    "culture_code": "en-GB",
+    "symbol": "£",
+    "symbol_position": true,
+    "currency_decimal_digits": 2
+  },
+  {
+    "id": 5,
+    "name": "Japanese Yen (JPY)",
+    "code": "JPY",
+    "culture_code": "ja-JP",
+    "symbol": "¥",
+    "symbol_position": true,
+    "currency_decimal_digits": 0
+  },
+  {
+    "id": 6,
+    "name": "Singapore Dollars (SGD)",
+    "code": "SGD",
+    "culture_code": "en-SG",
+    "symbol": "$",
+    "symbol_position": true,
+    "currency_decimal_digits": 2
+  },
+  {
+    "id": 7,
+    "name": "South Korean Won (KRW)",
+    "code": "KRW",
+    "culture_code": "ko-KR",
+    "symbol": "₩",
+    "symbol_position": true,
+    "currency_decimal_digits": 0
+  },
+  {
+    "id": 8,
+    "name": "Thai Baht (THB)",
+    "code": "THB",
+    "culture_code": "th-TH",
+    "symbol": "฿",
+    "symbol_position": true,
+    "currency_decimal_digits": 2
+  },
+  {
+    "id": 9,
+    "name": "Chinese Yuan (CNY)",
+    "code": "CNY",
+    "culture_code": "zh-CN",
+    "symbol": "¥",
+    "symbol_position": true,
+    "currency_decimal_digits": 2
+  },
+  {
+    "id": 10,
+    "name": "Australia (AUD)",
+    "code": "AUD",
+    "culture_code": "en-AU",
+    "symbol": "$",
+    "symbol_position": true,
+    "currency_decimal_digits": 2
+  },
+  {
+    "id": 11,
+    "name": "Hungarian Forint (HUF)",
+    "code": "HUF",
+    "culture_code": "hu-HU",
+    "symbol": "Ft",
+    "symbol_position": true,
+    "currency_decimal_digits": 2
+  },
+  {
+    "id": 12,
+    "name": "Swedish Krona (SEK)",
+    "code": "SEK",
+    "culture_code": "sv-SE",
+    "symbol": "kr",
+    "symbol_position": false,
+    "currency_decimal_digits": 2
+  },
+  {
+    "id": 13,
+    "name": "Switzerland Franc (CHF)",
+    "code": "CHF",
+    "culture_code": "en-CH",
+    "symbol": "fr.",
+    "symbol_position": true,
+    "currency_decimal_digits": 2
+  },
+  {
+    "id": 14,
+    "name": "New Zealand Dollar (NZD)",
+    "code": "NZD",
+    "culture_code": "en-NZ",
+    "symbol": "NZ$",
+    "symbol_position": true,
+    "currency_decimal_digits": 2
+  },
+  {
+    "id": 15,
+    "name": "New Taiwan Dollar (TWD)",
+    "code": "TWD",
+    "culture_code": "zh-TW",
+    "symbol": "NT$",
+    "symbol_position": true,
+    "currency_decimal_digits": 2
+  },
+  {
+    "id": 16,
+    "name": "Canadian Dollar (CAD)",
+    "code": "CAD",
+    "culture_code": "en-CA",
+    "symbol": "$",
+    "symbol_position": true,
+    "currency_decimal_digits": 2
+  },
+  {
+    "id": 17,
+    "name": "Laotian Kip (LAK)",
+    "code": "LAK",
+    "culture_code": "lo-LA",
+    "symbol": "₭",
+    "symbol_position": true,
+    "currency_decimal_digits": 2
+  }
+]

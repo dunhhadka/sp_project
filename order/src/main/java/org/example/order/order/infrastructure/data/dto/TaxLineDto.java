@@ -26,7 +26,7 @@ public class TaxLineDto implements GenerateTaxLine {
 
     private TaxLine.TargetType targetType;
 
-    private Integer quantity;
+    private int quantity;
 
     private boolean custom;
 

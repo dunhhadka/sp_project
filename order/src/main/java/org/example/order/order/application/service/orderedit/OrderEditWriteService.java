@@ -6,10 +6,14 @@ import org.apache.commons.collections4.CollectionUtils;
 import org.example.order.order.application.exception.ConstrainViolationException;
 import org.example.order.order.domain.order.model.*;
 import org.example.order.order.domain.order.persistence.OrderRepository;
+import org.example.order.order.domain.orderedit.model.AddedLineItem;
 import org.example.order.order.domain.orderedit.model.OrderEdit;
 import org.example.order.order.domain.orderedit.model.OrderEditId;
 import org.example.order.order.domain.orderedit.persistence.OrderEditRepository;
 import org.example.order.order.domain.refund.model.OrderAdjustment;
+import org.example.order.order.infrastructure.data.dto.Location;
+import org.example.order.order.infrastructure.data.dto.ProductDto;
+import org.example.order.order.infrastructure.data.dto.VariantDto;
 import org.springframework.stereotype.Service;
 import org.springframework.util.Assert;
 
@@ -177,7 +181,29 @@ public class OrderEditWriteService {
     private UUID addVariant(OrderEditRequest.AddVariant addVariant, OrderEditContextService.AddVariantsContext context) {
         var variant = context.getVariant(addVariant.getVariantId());
         var product = context.getProduct(variant.getProductId());
+
         var location = context.getEffectiveLocation(addVariant.getLocationId());
 
+        var lineItem = buildLineItem(variant, product, location, addVariant);
+
+        context.orderEdit().addLineItem(lineItem, context.taxSetting());
+
+        return lineItem.getId();
+    }
+
+    private AddedLineItem buildLineItem(VariantDto variant, ProductDto product, Location location, OrderEditRequest.AddVariant addVariant) {
+        return new AddedLineItem(
+                addVariant.getQuantity(),
+                variant.getId(),
+                product.getId(),
+                (int) location.getId(),
+                variant.getSku(),
+                product.getName(),
+                variant.getTitle(),
+                variant.getPrice(),
+                variant.isTaxable(),
+                variant.isRequiresShipping(),
+                true
+        );
     }
 }

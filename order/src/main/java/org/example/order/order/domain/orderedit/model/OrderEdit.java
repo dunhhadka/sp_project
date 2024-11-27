@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonUnwrapped;
 import jakarta.persistence.*;
 import lombok.Getter;
 import org.example.order.ddd.AggregateRoot;
+import org.example.order.order.application.utils.TaxSetting;
 import org.example.order.order.domain.order.model.OrderId;
 import org.hibernate.annotations.DynamicUpdate;
 import org.hibernate.annotations.Fetch;
@@ -117,5 +118,13 @@ public class OrderEdit extends AggregateRoot<OrderEdit> {
 
         this.createdAt = Instant.now();
         this.modifiedAt = Instant.now();
+    }
+
+    public void addLineItem(AddedLineItem lineItem, TaxSetting taxSetting) {
+        lineItem.setAggRoot(this);
+
+        this.lineItems.add(lineItem);
+
+
     }
 }

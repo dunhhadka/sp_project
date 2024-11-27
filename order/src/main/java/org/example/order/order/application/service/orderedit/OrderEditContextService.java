@@ -42,6 +42,10 @@ public class OrderEditContextService {
         OrderEdit orderEdit();
     }
 
+    public interface NeedTax {
+        TaxSetting taxSetting();
+    }
+
     private abstract class AbstractContext<T> implements EditContext {
         private final OrderEdit orderEdit;
         private final T request;
@@ -174,7 +178,7 @@ public class OrderEditContextService {
     }
 
 
-    public interface AddVariantsContext extends EditContext {
+    public interface AddVariantsContext extends EditContext, NeedTax {
         VariantDto getVariant(Integer variantId);
 
         ProductDto getProduct(Integer productId);
@@ -242,6 +246,11 @@ public class OrderEditContextService {
         @Override
         public Location getEffectiveLocation(Integer locationId) {
             return locations.getOrDefault(locationId == null ? null : locationId.longValue(), locations.get(null));
+        }
+
+        @Override
+        public TaxSetting taxSetting() {
+            return this.taxSetting;
         }
     }
 }

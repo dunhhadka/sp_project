@@ -121,6 +121,13 @@ public class OrderEdit extends AggregateRoot<OrderEdit> {
         this.modifiedAt = Instant.now();
     }
 
+    /**
+     * add newLineItem
+     * B1: tính toán lại quantity
+     * B2: tính lại price
+     * B3: xác định xem có nên apply thuế không => add thuế
+     * B4: xác định changeType, action => add vảo
+     */
     public void addLineItem(AddedLineItem lineItem, TaxSetting taxSetting) {
         lineItem.setAggRoot(this);
 
@@ -166,6 +173,7 @@ public class OrderEdit extends AggregateRoot<OrderEdit> {
     }
 
     private boolean shouldCalculateTax(Integer productId, TaxSetting taxSetting) {
+
         return true;
     }
 

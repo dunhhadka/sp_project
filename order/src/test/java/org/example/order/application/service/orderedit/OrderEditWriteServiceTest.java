@@ -2,20 +2,16 @@ package org.example.order.application.service.orderedit;
 
 import lombok.extern.slf4j.Slf4j;
 import org.junit.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.ApplicationContext;
-
-import java.util.Arrays;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.test.context.junit.jupiter.SpringExtension;
 
 @Slf4j
+@ExtendWith(SpringExtension.class)
 public class OrderEditWriteServiceTest extends OrderBaseServiceTest {
-
-    @Autowired
-    private ApplicationContext applicationContext;
 
     @Test
     public void test() {
-        Arrays.stream(applicationContext.getBeanDefinitionNames())
-                .forEach(log::info);
+        Assertions.assertEquals(1, 1);
     }
 }

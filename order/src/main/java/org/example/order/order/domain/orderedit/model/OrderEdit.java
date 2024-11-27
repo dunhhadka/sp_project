@@ -18,6 +18,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Currency;
 import java.util.List;
+import java.util.UUID;
 
 @Entity
 @Getter
@@ -124,7 +125,53 @@ public class OrderEdit extends AggregateRoot<OrderEdit> {
         lineItem.setAggRoot(this);
 
         this.lineItems.add(lineItem);
+        this.subtotalLineItemQuantity = this.subtotalLineItemQuantity.add(lineItem.getEditableSubtotal());
 
+        OrderStagedChange.ChangeType type;
+        OrderStagedChange.BaseAction action;
+        if (lineItem.getVariantId() != null) { // add variant
+            type = OrderStagedChange.ChangeType.add_variant;
+            action = OrderStagedChange.AddVariant.builder()
+                    .lineItemId(lineItem.getId())
+                    .variantId(lineItem.getVariantId())
+                    .locationId(lineItem.getLocationId())
+                    .quantity(lineItem.getEditableQuantity())
+                    .build();
+        } else { // add custom item
+            type = OrderStagedChange.ChangeType.add_custom_item;
+            action = OrderStagedChange.AddCustomItem.builder()
+                    .lineItemId(lineItem.getId())
+                    .title(lineItem.getTitle())
+                    .price(lineItem.getOriginalUnitPrice())
+                    .quantity(lineItem.getEditableQuantity())
+                    .taxable(lineItem.isTaxable())
+                    .requireShipping(lineItem.isRequireShipping())
+                    .locationId(lineItem.getLocationId())
+                    .build();
+        }
 
+        this.adjustPrice(lineItem.getOriginalUnitPrice());
+
+        this.addTax(lineItem.getProductId(), taxSetting);
+
+        var stagedChange = new OrderStagedChange(UUID.randomUUID(), type, action);
+        stagedChange.setAggRoot(this);
+        this.stagedChanges.add(stagedChange);
+    }
+
+    private void addTax(Integer productId, TaxSetting taxSetting) {
+        if (shouldCalculateTax(productId, taxSetting)) {
+
+        }
+    }
+
+    private boolean shouldCalculateTax(Integer productId, TaxSetting taxSetting) {
+        return true;
+    }
+
+    private void adjustPrice(BigDecimal adjustmentPrice) {
+        this.subtotalPrice = this.subtotalPrice.add(adjustmentPrice);
+        this.totalPrice = this.totalPrice.add(adjustmentPrice);
+        this.totalOutStanding = this.totalOutStanding.add(adjustmentPrice);
     }
 }

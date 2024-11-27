@@ -21,6 +21,7 @@ import java.util.UUID;
 public class OrderStagedChange {
     @JsonIgnore
     @ManyToOne
+    @Setter(AccessLevel.PACKAGE)
     @JoinColumn(name = "editing_id", referencedColumnName = "id")
     @JoinColumn(name = "store_id", referencedColumnName = "store_id")
     private OrderEdit aggRoot;
@@ -118,6 +119,7 @@ public class OrderStagedChange {
 
     @Getter
     @Setter
+    @Builder
     public static class AddCustomItem extends BaseAction implements AddLineItemAction {
         @NotNull
         private UUID lineItemId;

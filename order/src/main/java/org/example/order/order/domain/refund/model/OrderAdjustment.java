@@ -20,8 +20,8 @@ public class OrderAdjustment {
     @JsonIgnore
     @Setter(AccessLevel.PACKAGE)
     @ManyToOne
-    @JoinColumn(name = "orderId", referencedColumnName = "orderId")
-    @JoinColumn(name = "storeId", referencedColumnName = "storeId")
+//    @JoinColumn(name = "storeId", referencedColumnName = "storeId")
+//    @JoinColumn(name = "orderId", referencedColumnName = "orderId")
     @JoinColumn(name = "refundId", referencedColumnName = "id")
     private Refund refund;
 
@@ -40,6 +40,23 @@ public class OrderAdjustment {
 
     @Version
     private Integer version;
+
+    public OrderAdjustment(
+            int id,
+            RefundKind refundKind,
+            Object o,
+            BigDecimal amount,
+            BigDecimal taxAmount
+    ) {
+        this.id = id;
+        this.refundKind = refundKind;
+        switch (refundKind) {
+            case shipping_refund -> this.reason = refundKind.toString();
+            case refund_discrepancy -> this.reason = null;
+        }
+        this.amount = amount;
+        this.taxAmount = taxAmount;
+    }
 
     public enum RefundKind {
         shipping_refund,

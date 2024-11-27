@@ -1,5 +1,6 @@
 package org.example.order.order.domain.transaction.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonUnwrapped;
 import jakarta.persistence.*;
 import lombok.AccessLevel;
@@ -76,8 +77,16 @@ public class OrderTransaction extends AggregateRoot<OrderTransaction> {
     @Column(columnDefinition = "DATETIME2")
     private Instant createdOn;
 
+    @Size(max = 250)
+    private String gateway;
+
     public boolean isCaptureOrSaleSuccess() {
         return true;
+    }
+
+    @JsonIgnore
+    public boolean isRefundSuccess() {
+        return Kind.refund.equals(this.kind) && Status.success.equals(this.status);
     }
 
     public enum Kind implements CustomValueEnum<String> {

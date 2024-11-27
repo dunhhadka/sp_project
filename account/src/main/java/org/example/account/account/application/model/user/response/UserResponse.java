@@ -1,2 +1,4 @@
-package org.example.account.account.application.model.user.response;public class UserResponse {
+package org.example.account.account.application.model.user.response;
+
+public class UserResponse {
 }

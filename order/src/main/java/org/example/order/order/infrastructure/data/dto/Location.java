@@ -1,10 +1,12 @@
 package org.example.order.order.infrastructure.data.dto;
 
-import lombok.Getter;
-import lombok.Setter;
+import lombok.*;
 
 @Getter
 @Setter
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
 public class Location {
     private long id;
     private int storeId;

@@ -1,4 +1,4 @@
-package org.example.order.order.application.exception;
+package org.example.account.account.application.exception;
 
 import java.util.*;
 

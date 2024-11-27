@@ -34,4 +34,9 @@ public class FulfillmentLineItem {
 
     @Version
     private Integer version;
+
+    public void updateEffectiveQuantity(int newQuantity) {
+        if (newQuantity < 0) return;
+        this.effectiveQuantity = newQuantity;
+    }
 }

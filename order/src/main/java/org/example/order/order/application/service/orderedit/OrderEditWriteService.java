@@ -1,0 +1,183 @@
+package org.example.order.order.application.service.orderedit;
+
+import jakarta.transaction.Transactional;
+import lombok.RequiredArgsConstructor;
+import org.apache.commons.collections4.CollectionUtils;
+import org.example.order.order.application.exception.ConstrainViolationException;
+import org.example.order.order.domain.order.model.*;
+import org.example.order.order.domain.order.persistence.OrderRepository;
+import org.example.order.order.domain.orderedit.model.OrderEdit;
+import org.example.order.order.domain.orderedit.model.OrderEditId;
+import org.example.order.order.domain.orderedit.persistence.OrderEditRepository;
+import org.example.order.order.domain.refund.model.OrderAdjustment;
+import org.springframework.stereotype.Service;
+import org.springframework.util.Assert;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+
+@Service
+@RequiredArgsConstructor
+public class OrderEditWriteService {
+
+    private final OrderRepository orderRepository;
+    private final OrderEditRepository orderEditRepository;
+    private final OrderEditContextService orderEditContextService;
+
+    /**
+     * cartDiscountAmount = Giảm giá trong shipping và giảm giá đơn hàng trong line_item
+     */
+    @Transactional
+    public OrderEditId beginEdit(OrderId orderId) {
+        var order = getOrderById(orderId);
+        var currency = order.getMoneyInfo().getCurrency();
+
+        BigDecimal subtotalLineItemQuantity = BigDecimal.ZERO;
+
+        BigDecimal cartDiscountAmount = BigDecimal.ZERO;
+        BigDecimal productDiscountAmount = BigDecimal.ZERO;
+
+        BigDecimal subtotalPrice = BigDecimal.ZERO;
+
+        BigDecimal totalShippingPrice = BigDecimal.ZERO;
+        BigDecimal shippingRefundAmount = BigDecimal.ZERO;
+
+        BigDecimal totalTax = BigDecimal.ZERO;
+
+        Map<Integer, Integer> refundedLineItem = new HashMap<>();
+        for (var refund : order.getRefunds()) {
+            for (var refundLine : refund.getRefundLineItems()) {
+                refundedLineItem.merge(refundLine.getLineItemId(), refundLine.getQuantity(), Integer::sum);
+            }
+            if (CollectionUtils.isNotEmpty(refund.getOrderAdjustments())) {
+                for (var adjustment : refund.getOrderAdjustments()) {
+                    if (adjustment.getRefundKind() == OrderAdjustment.RefundKind.shipping_refund) {
+                        var refundAmount = adjustment.getAmount().add(adjustment.getTaxAmount());
+                        shippingRefundAmount = shippingRefundAmount.add(refundAmount);
+                    }
+                }
+            }
+        }
+
+        for (var shipping : order.getShippingLines()) {
+            totalShippingPrice = totalShippingPrice.add(shipping.getPrice());
+            if (CollectionUtils.isNotEmpty(shipping.getDiscountAllocations())) {
+                var shippingDiscountAmount = shipping.getDiscountAllocations().stream()
+                        .map(DiscountAllocation::getAmount)
+                        .reduce(BigDecimal.ZERO, BigDecimal::add);
+                cartDiscountAmount = cartDiscountAmount.add(shippingDiscountAmount);
+            }
+        }
+
+        for (var lineItem : order.getLineItems()) {
+            var lineItemId = lineItem.getId();
+
+            var originalQuantityDecimal = BigDecimal.valueOf(lineItem.getQuantity());
+            var refundedQuantity = refundedLineItem.getOrDefault(lineItemId, 0);
+            var refundedQuantityDecimal = BigDecimal.valueOf(refundedQuantity);
+            var currentQuantity = originalQuantityDecimal.subtract(refundedQuantityDecimal);
+
+            if (currentQuantity.signum() <= 0) continue;
+            subtotalLineItemQuantity = subtotalLineItemQuantity.add(currentQuantity);
+
+            var currentLinePrice = lineItem.getPrice().multiply(currentQuantity);
+            subtotalPrice = subtotalPrice.add(currentLinePrice);
+
+            BigDecimal productDiscount = BigDecimal.ZERO;
+            BigDecimal cartDiscount = BigDecimal.ZERO;
+            for (var discount : lineItem.getDiscountAllocations()) {
+                if (filterCartDiscount(discount, order)) {
+                    cartDiscount = cartDiscount.add(discount.getAmount());
+                } else {
+                    productDiscount = productDiscount.add(discount.getAmount());
+                }
+            }
+
+            var effectiveProductDiscount = productDiscount
+                    .multiply(currentQuantity)
+                    .divide(originalQuantityDecimal, currency.getDefaultFractionDigits(), RoundingMode.CEILING);
+            productDiscountAmount = productDiscountAmount.add(effectiveProductDiscount);
+
+            var effectiveCartDiscount = cartDiscount
+                    .multiply(currentQuantity)
+                    .divide(originalQuantityDecimal, currency.getDefaultFractionDigits(), RoundingMode.CEILING);
+            cartDiscountAmount = cartDiscountAmount.add(effectiveCartDiscount);
+
+            var totalTaxLine = lineItem.getTaxLines().stream()
+                    .map(TaxLine::getPrice)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            var effectiveTaxLinePrice = totalTaxLine
+                    .multiply(currentQuantity)
+                    .divide(originalQuantityDecimal, currency.getDefaultFractionDigits(), RoundingMode.FLOOR);
+            totalTax = totalTax.add(effectiveTaxLinePrice);
+        }
+
+        var totalPrice = subtotalPrice
+                .add(totalShippingPrice)
+                .add(totalTax)
+                .subtract(shippingRefundAmount)
+                .subtract(cartDiscountAmount)
+                .subtract(productDiscountAmount);
+        var totalOutStanding = order.getMoneyInfo().getTotalOutstanding();
+
+        var orderEdit = new OrderEdit(
+                order.getId(),
+                currency,
+                subtotalLineItemQuantity,
+                subtotalPrice,
+                cartDiscountAmount,
+                totalPrice,
+                totalOutStanding
+        );
+
+        return orderEdit.getId();
+    }
+
+    private boolean filterCartDiscount(DiscountAllocation discount, Order order) {
+        var application = order.getDiscountApplications().get(discount.getApplicationIndex());
+        Assert.isTrue(application.getId() == discount.getApplicationId(),
+                "discount_application's order is incorrect");
+        return application.getRuleType() == DiscountApplication.RuleType.order;
+    }
+
+    private Order getOrderById(OrderId orderId) {
+        var order = orderRepository.findById(orderId);
+        if (order == null) throw new ConstrainViolationException("order", "not found by id");
+        if (order.getCancelledOn() != null) {
+            throw new ConstrainViolationException("order", "cancelled_order can't be edit");
+        }
+        if (order.getClosedOn() != null) {
+            throw new ConstrainViolationException("order", "closed_order can't be edit");
+        }
+        return order;
+    }
+
+
+    /**
+     * addVariant :  {variantId, quantity, locationId, allowDuplicate} => context: productInfo, locationInfo, taxLineInfo
+     */
+    @Transactional
+    public List<UUID> addVariants(OrderEditId editingId, OrderEditRequest.AddVariants addVariants) {
+        var context = orderEditContextService.getAddVariantsContext(editingId, addVariants.getAddVariants());
+        List<UUID> lineItemIds = addVariants(addVariants, context);
+        orderEditRepository.save(context.orderEdit());
+        return lineItemIds;
+    }
+
+    private List<UUID> addVariants(OrderEditRequest.AddVariants addVariants, OrderEditContextService.AddVariantsContext context) {
+        return addVariants.getAddVariants().stream()
+                .map(addVariant -> this.addVariant(addVariant, context))
+                .toList();
+    }
+
+    private UUID addVariant(OrderEditRequest.AddVariant addVariant, OrderEditContextService.AddVariantsContext context) {
+        var variant = context.getVariant(addVariant.getVariantId());
+        var product = context.getProduct(variant.getProductId());
+        var location = context.getEffectiveLocation(addVariant.getLocationId());
+
+    }
+}

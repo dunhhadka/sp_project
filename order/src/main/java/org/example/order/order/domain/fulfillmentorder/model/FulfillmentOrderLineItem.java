@@ -54,11 +54,30 @@ public class FulfillmentOrderLineItem {
         this.remainingQuantity = quantity;
     }
 
-    public void fulfill() {
+    public void fulfillAndClose() {
+        this.remainingQuantity = 0;
+    }
+
+
+    public void restock(int quantity) {
+        this.remainingQuantity -= quantity;
+        this.totalQuantity -= quantity;
+    }
+
+    public void fulfillAll() {
         this.remainingQuantity = 0;
     }
 
     public void fulfillAndClose(int quantity) {
+        this.remainingQuantity = 0;
+    }
+
+    public void fulfill(int quantity) {
+        this.remainingQuantity -= quantity;
+    }
+
+    public void closeEntry() {
+        this.totalQuantity -= remainingQuantity;
         this.remainingQuantity = 0;
     }
 }

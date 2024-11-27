@@ -27,4 +27,9 @@ public class JdbcLineItemDao implements LineItemDao {
                 BeanPropertyRowMapper.newInstance(LineItemDto.class)
         );
     }
+
+    @Override
+    public List<LineItemDto> getByIds(int storeId, List<Long> ids) {
+        return null;
+    }
 }

@@ -5,6 +5,8 @@ import java.util.List;
 
 public final class AddressUtils {
 
+    public static final String VN_COUNTRY_CODE = "VN";
+
     public static List<Country> countryList() {
         return CountriesHolder.countries;
     }

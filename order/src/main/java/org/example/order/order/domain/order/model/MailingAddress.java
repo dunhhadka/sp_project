@@ -1,9 +1,7 @@
 package org.example.order.order.domain.order.model;
 
 import jakarta.persistence.Embeddable;
-import lombok.AccessLevel;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
+import lombok.*;
 import org.example.order.order.application.utils.Country;
 import org.example.order.order.application.utils.District;
 import org.example.order.order.application.utils.Province;
@@ -13,6 +11,8 @@ import javax.validation.constraints.Size;
 
 @Getter
 @Embeddable
+@Builder
+@AllArgsConstructor
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class MailingAddress {
     @Size(max = 50)

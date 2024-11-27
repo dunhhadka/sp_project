@@ -28,8 +28,26 @@ spring:
       maxIdle: 50
       minIdle: 10
       maxTotal: 50
-#server:
-#  port:
-#logging:
-#  level:
-#    org.example.order.order.infrastructure.configuration.feign.WebClient: DEBUG
+
+  kafka:
+    listener:
+      auto-startup: true
+    order:
+      topic:
+        order-log: hadung.OrderLogs
+      group:
+        es-order-indexer: hadung.order.es-order-indexer
+  elasticsearch:
+    order-type: order
+    order-index: hadung-store
+kafka:
+  broker:
+    address: localhost:9092
+
+es.hosts: localhost:9200
+eureka:
+  client:
+    service-url:
+      defaultZone: http://localhost:8761/eureka
+  instance:
+    instance-id: ${spring.application.name}:${random.uuid}

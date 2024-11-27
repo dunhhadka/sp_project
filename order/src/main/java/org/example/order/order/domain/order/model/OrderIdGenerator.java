@@ -25,4 +25,8 @@ public interface OrderIdGenerator {
     int generateOrderId();
 
     Deque<Integer> generateRefundLineIds(int size);
+
+    int generateAdjustmentId();
+
+    int generateRefundId();
 }

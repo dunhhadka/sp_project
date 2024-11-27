@@ -20,6 +20,7 @@ import java.util.UUID;
 
 @Getter
 @Setter
+@Builder
 public class OrderCreateRequest {
 
     private UUID clientId;
@@ -140,6 +141,7 @@ public class OrderCreateRequest {
 
     @Getter
     @Setter
+    @Builder
     public static class LineItemRequest {
         private Integer variantId;
 

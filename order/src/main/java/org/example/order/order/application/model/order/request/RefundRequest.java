@@ -7,6 +7,7 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.Setter;
+import lombok.experimental.Accessors;
 import org.example.order.order.domain.refund.model.RefundLineItem;
 
 import javax.validation.Valid;
@@ -19,6 +20,7 @@ import java.util.List;
 
 @Getter
 @Setter
+@Builder
 public class RefundRequest {
     @JsonAlias("processed_at")
     @JsonProperty("processed_at")
@@ -42,6 +44,16 @@ public class RefundRequest {
 
     private Option option;
 
+    private Reference reference;
+
+    @Getter
+    @AllArgsConstructor
+    public static class Reference {
+        private long orderReturnId;
+        private String orderReturnName;
+    }
+
+
     @Getter
     @Setter
     public static class Cancel {
@@ -51,6 +63,7 @@ public class RefundRequest {
 
     @Getter
     @Setter
+    @Accessors(chain = true)
     public static class Shipping {
         private Boolean fullRefund;
         @PositiveOrZero

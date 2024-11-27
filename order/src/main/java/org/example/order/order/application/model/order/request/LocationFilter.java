@@ -10,6 +10,8 @@ import java.util.List;
 public class LocationFilter {
     private int limit;
     private int page;
+    private Long id;
     private List<Long> locationIds;
     private Boolean defaultLocation;
+    private boolean inventoryManagement;
 }

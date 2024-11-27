@@ -9,6 +9,8 @@ import org.example.order.order.domain.order.model.MailingAddress;
 import org.example.order.order.infrastructure.data.dao.CustomerDao;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
+import java.util.Set;
 import java.util.function.Supplier;
 
 @Slf4j
@@ -54,5 +56,9 @@ public class CustomerService {
 
     public Customer update(int storeId, int id, String email, String phone) {
         return new Customer();
+    }
+
+    public List<Customer> findByIds(List<Integer> storeIds, Set<Integer> ids) {
+        return List.of();
     }
 }

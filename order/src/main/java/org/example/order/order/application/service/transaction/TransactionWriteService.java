@@ -1,10 +1,12 @@
 package org.example.order.order.application.service.transaction;
 
-import lombok.Getter;
 import lombok.RequiredArgsConstructor;
-import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.lang3.StringUtils;
+import org.example.order.order.application.exception.ConstrainViolationException;
+import org.example.order.order.application.exception.NotFoundException;
+import org.example.order.order.application.exception.UserError;
 import org.example.order.order.application.model.order.context.OrderCreatedEvent;
 import org.example.order.order.application.model.order.request.TransactionCreateRequest;
 import org.example.order.order.domain.order.model.Order;
@@ -14,11 +16,18 @@ import org.example.order.order.domain.transaction.model.OrderTransaction;
 import org.example.order.order.domain.transaction.model.OrderTransactionIdGenerator;
 import org.example.order.order.domain.transaction.model.PaymentInfo;
 import org.example.order.order.domain.transaction.model.TransactionId;
+import org.springframework.context.MessageSource;
 import org.springframework.context.event.EventListener;
+import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.util.*;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
+import static org.example.order.order.application.service.transaction.TransactionHelper.*;
+
 
 @Slf4j
 @Service
@@ -28,27 +37,34 @@ public class TransactionWriteService {
     private final OrderRepository orderRepository;
     private final OrderTransactionIdGenerator transactionIdGenerator;
 
+    private final MessageSource messageSource;
+
     @EventListener(OrderCreatedEvent.class)
     public void handleOrderTransactionAdded(OrderCreatedEvent event) {
-        log.debug("handle order transaction added: {}", event);
-
-        var paymentResult = event.getOrderPaymentResult();
-        if (paymentResult.isFromCheckout()) return;
+        var paymentResult = event.getPaymentResult();
+        if (paymentResult.isFromCheckout()) {
+            return;
+        }
 
         var store = event.getStore();
         var orderId = event.getOrderId();
         var transactionRequests = event.getTransactionRequests();
 
-        Map<Long, OrderTransaction> transactionMap = new HashMap<>();
+        if (CollectionUtils.isEmpty(transactionRequests)) {
+            return;
+        }
+
+        Map<Integer, OrderTransaction> transactionMap = new HashMap<>();
 
         var order = orderRepository.findById(orderId);
 
-        var orderGateWay = getPaymentGateway(order);
+        var orderGateWay = getRepresentativeGateway(order);
 
         var paymentMethodIds = transactionRequests.stream()
                 .map(TransactionCreateRequest::getPaymentInfo)
                 .filter(Objects::nonNull)
                 .map(PaymentInfo::getPaymentId)
+                .distinct()
                 .toList();
 
         var requestedGatewayNames = transactionRequests.stream()
@@ -58,107 +74,78 @@ public class TransactionWriteService {
 
         var paymentMethodMap = verifyPaymentMethods(store.getId(), paymentMethodIds, requestedGatewayNames);
 
-        var transactionIdsQueue = transactionIdGenerator.generateOrderTransactionIds(transactionRequests.size());
+        var transactionIdQueue = transactionIdGenerator.generateOrderTransactionIds(transactionRequests.size());
 
-        transactionRequests.forEach(txnReq -> txnReq.setTempId(transactionIdsQueue.removeFirst()));
+        transactionRequests.forEach(req -> req.setTempId(transactionIdQueue.removeFirst()));
 
         transactionRequests.forEach(txnReq -> {
-            var requestKind = txnReq.getKind();
+            var requestedKind = txnReq.getKind();
             var transactionId = new TransactionId(store.getId(), txnReq.getTempId());
             var locationId = order.getLocationId();
+            Integer userId = null;
+            String clientId = null;
             var deviceId = txnReq.getDeviceId();
-            var sourceName = determineSourceName(txnReq.getSourceName(), order.getTrackingInfo().getSourceName());
+            var sourceName = determineSourceName(txnReq.getSourceName(), order.getTrackingInfo().getSourceName(), clientId);
             var processingMethod = txnReq.getProcessingMethod();
-            var amount = OrderTransaction.Kind._void.equals(requestKind) ? BigDecimal.ZERO : txnReq.getAmount();
+            var amount = OrderTransaction.Kind._void.equals(txnReq.getKind()) ? BigDecimal.ZERO : txnReq.getAmount();
             var currencyCode = order.getMoneyInfo().getCurrency().getCurrencyCode();
+            var authorization = txnReq.getAuthorization();
             var receipt = txnReq.getReceipt();
-            var causeType = determineCauseType(txnReq);
+            var processAt = txnReq.getProcessedOn();
+
             var parentTransaction = determineParentTransaction(txnReq, transactionRequests);
             var parentId = Optional.ofNullable(parentTransaction).map(TransactionCreateRequest::getTempId).orElse(null);
-            var paymentInfo = determinePaymentInfo(
-                    txnReq.getPaymentInfo(),
-                    txnReq.getGateway(),
-                    Optional.ofNullable(parentTransaction).map(TransactionCreateRequest::getPaymentInfo).orElse(null),
-                    paymentMethodMap);
-            var gateWay = determineGateway(paymentInfo, StringUtils.firstNonBlank(txnReq.getGateway(), orderGateWay));
+
+            var paymentInfo = determinePaymentInfo(txnReq.getPaymentInfo(), txnReq.getGateway(), Optional.ofNullable(parentTransaction).map(TransactionCreateRequest::getPaymentInfo).orElse(null), paymentMethodMap);
         });
     }
 
-    private String determineGateway(PaymentInfo paymentInfo, String orderGateway) {
-        return StringUtils.firstNonBlank(
-                Optional.ofNullable(paymentInfo).map(PaymentInfo::getPaymentMethodName).orElse(null),
-                orderGateway
-        );
-    }
+    private Map<Integer, PaymentMethod> verifyPaymentMethods(int storeId, List<Long> paymentMethodIds, List<String> paymentGateways) {
+        List<PaymentMethod> paymentMethods = null;
 
-    private PaymentInfo determinePaymentInfo(
-            PaymentInfo paymentInfoRequest,
-            String gateway,
-            PaymentInfo parentPaymentInfo,
-            Map<Long, PaymentMethod> paymentMethodMap
-    ) {
-        PaymentInfo paymentInfo = null;
-        if (paymentInfoRequest != null && paymentInfoRequest.getPaymentMethodId() != null) {
-            var paymentMethod = paymentMethodMap.get(paymentInfoRequest.getPaymentMethodId());
-            paymentInfo = PaymentInfo.builder()
-                    .paymentId(paymentInfoRequest.getPaymentId())
-                    .paymentMethodId((long) paymentMethod.getId())
-                    .paymentMethodName(paymentMethod.getName())
-                    .providerId(paymentMethod.getProviderId())
-                    .build();
-        } else if (StringUtils.isNotBlank(gateway)) {
-            var paymentMethod = paymentMethodMap.values().stream()
-                    .filter(p -> StringUtils.equals(p.getName(), gateway))
-                    .findFirst().orElse(null);
-            if (paymentMethod != null) {
-                paymentInfo = PaymentInfo.builder()
-                        .paymentMethodId((long) paymentMethod.getId())
-                        .paymentMethodName(paymentMethod.getName())
-                        .providerId(paymentMethod.getProviderId())
-                        .build();
+        if (CollectionUtils.isNotEmpty(paymentMethodIds)) {
+            if (paymentMethodIds.size() == 1) {
+                var paymentMethod = new PaymentMethod();
+                if ("active".equals(paymentMethod.getStatus())) {
+                    throw new ConstrainViolationException(UserError.builder()
+                            .code("not_active")
+                            .fields(List.of("payment_method"))
+                            .message(messageSource.getMessage("payment.error.payment", null, LocaleContextHolder.getLocale()))
+                            .build());
+                }
+                paymentMethods = List.of(paymentMethod);
+            } else {
+                paymentMethods = new ArrayList<>();
             }
+
+            var resultPaymentMethodIds = paymentMethods.stream()
+                    .map(PaymentMethod::getId)
+                    .map(Long::valueOf)
+                    .collect(Collectors.toSet());
+
+            var notFoundPaymentMethodIds = paymentMethodIds.stream()
+                    .filter(id -> !resultPaymentMethodIds.contains(id))
+                    .toList();
+            if (CollectionUtils.isNotEmpty(notFoundPaymentMethodIds)) {
+                throw new NotFoundException("Payment methods not found: " + notFoundPaymentMethodIds);
+            }
+        } else if (CollectionUtils.isNotEmpty(paymentGateways)) {
+            paymentMethods = new ArrayList<>();
         }
 
-        return Optional.ofNullable(paymentInfo).orElse(parentPaymentInfo);
+        return Optional.ofNullable(paymentMethods)
+                .orElse(List.of())
+                .stream()
+                .collect(Collectors.toMap(
+                        PaymentMethod::getId,
+                        Function.identity(), (a, b) -> a));
     }
 
-    private TransactionCreateRequest determineParentTransaction(
-            TransactionCreateRequest transaction,
-            List<TransactionCreateRequest> transactionRequests
-    ) {
-        return null;
-    }
-
-    private OrderTransaction.CauseType determineCauseType(TransactionCreateRequest transactionCreateRequest) {
-        if (transactionCreateRequest.getCauseType() == null) {
-            return OrderTransaction.CauseType.external;
-        }
-        return transactionCreateRequest.getCauseType();
-    }
-
-    private String determineSourceName(String sourceName, String orderSourceName) {
-        return StringUtils.firstNonBlank(sourceName, orderSourceName, "web");
-    }
-
-    private Map<Long, PaymentMethod> verifyPaymentMethods(int id, List<Long> paymentMethodIds, List<String> requestedGatewayNames) {
-        List<PaymentMethod> paymentMethods = new ArrayList<>();
-
-        return new HashMap<>();
-    }
-
-    private String getPaymentGateway(Order order) {
+    private String getRepresentativeGateway(Order order) {
         return Optional.ofNullable(order.getPaymentMethodInfo())
                 .map(PaymentMethodInfo::getGateWay)
                 .flatMap(gw -> Arrays.stream(gw.trim().split(",")).findFirst())
                 .orElse(null);
     }
 
-    @Getter
-    @Setter
-    public static class PaymentMethod {
-        private int id;
-        private int providerId;
-        private String name;
-        private String description;
-    }
 }

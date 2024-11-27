@@ -1,8 +1,8 @@
 package org.example.account.account.domain.user;
 
-import org.springframework.stereotype.Repository;
+import org.springframework.stereotype.Service;
 
-@Repository
-public class UserMongoGenerator implements UserGenerator {
+@Service
+public class UserMongoIdGenerator implements UserIdGenerator {
 
 }

@@ -18,6 +18,6 @@ public class OrderCreatedEvent {
     private OrderId orderId;
     private OrderRoutingResponse orderRoutingResponse;
     private List<OrderCreateRequest.FulfillmentRequest> fulfillmentRequests;
-    private OrderPaymentResult orderPaymentResult;
+    private OrderPaymentResult paymentResult;
     private List<TransactionCreateRequest> transactionRequests;
 }

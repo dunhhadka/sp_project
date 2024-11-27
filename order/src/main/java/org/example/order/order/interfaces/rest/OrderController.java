@@ -4,14 +4,17 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.example.order.order.application.model.order.request.OrderCreateRequest;
 import org.example.order.order.application.model.order.request.OrderFilterRequest;
+import org.example.order.order.application.model.order.request.OrderSearchRequest;
 import org.example.order.order.application.model.order.response.OrderResponse;
 import org.example.order.order.application.service.order.OrderCacheService;
 import org.example.order.order.application.service.order.OrderReadService;
+import org.example.order.order.application.service.order.OrderSearchService;
 import org.example.order.order.application.service.order.OrderWriteService;
 import org.example.order.order.infrastructure.configuration.bind.StoreId;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
+import javax.validation.Valid;
 import java.util.List;
 
 @Slf4j
@@ -22,6 +25,7 @@ public class OrderController {
 
     private final OrderWriteService orderWriteService;
     private final OrderReadService orderReadService;
+    private final OrderSearchService orderSearchService;
 
     private final OrderCacheService orderCacheService;
 
@@ -40,5 +44,14 @@ public class OrderController {
     @PostMapping("/cache")
     public void insertToCache() {
         var list = List.of(1, 2, 3, 4);
+    }
+
+    @GetMapping("/search")
+    public List<OrderResponse> search(
+            @StoreId Integer storeId,
+            @RequestBody @Valid OrderSearchRequest request
+    ) {
+        var searchResult = orderSearchService.search(storeId, request);
+        return null;
     }
 }

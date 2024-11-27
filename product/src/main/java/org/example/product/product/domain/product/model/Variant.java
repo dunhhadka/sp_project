@@ -3,126 +3,216 @@ package org.example.product.product.domain.product.model;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonUnwrapped;
 import jakarta.persistence.*;
-import jakarta.validation.Valid;
-import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Size;
-import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
-import org.apache.commons.lang3.ObjectUtils;
+import org.apache.commons.collections4.CollectionUtils;
+import org.apache.commons.lang3.tuple.Triple;
+import org.example.product.ddd.NestedDomainEvent;
+import org.example.product.product.application.converters.ListIntegerConverter;
+import org.example.product.product.domain.product.event.ObjectPropertyChange;
+import org.example.product.product.domain.product.event.PropertyChanged;
+import org.hibernate.annotations.DynamicUpdate;
 
+import javax.validation.Valid;
+import javax.validation.constraints.Max;
+import javax.validation.constraints.Min;
+import javax.validation.constraints.NotBlank;
+import javax.validation.constraints.Size;
 import java.time.Instant;
-import java.util.Objects;
+import java.util.List;
 
 @Entity
 @Getter
-@Table(name = "ProductVariants")
-@NoArgsConstructor(access = AccessLevel.PROTECTED)
-public class Variant {
+@DynamicUpdate
+@Table(name = "variants")
+@NoArgsConstructor
+public class Variant extends NestedDomainEvent<Product> {
 
     @JsonIgnore
     @ManyToOne
-    @Setter(AccessLevel.PACKAGE)
+    @Setter
     @JoinColumn(name = "storeId", referencedColumnName = "storeId")
     @JoinColumn(name = "productId", referencedColumnName = "id")
     private Product aggRoot;
 
     @Id
     private int id;
-
     private int inventoryItemId;
-
-    @NotNull
-    @Size(max = 500)
-    private String title = VariantOptionInfo.DEFAULT_OPTION_VARIANT;
-
-    @Embedded
-    @JsonUnwrapped
-    private @Valid VariantIdentityInfo identityInfo;
-
-    @Embedded
-    @JsonUnwrapped
-    private @Valid VariantPricingInfo pricingInfo;
-
-    @Embedded
-    @JsonUnwrapped
-    private @Valid VariantOptionInfo optionInfo;
-
-    @Embedded
-    @JsonUnwrapped
-    private VariantInventoryInfo inventoryInfo;
-
-    @Embedded
-    @JsonUnwrapped
-    private @Valid VariantPhysicalInfo physicalInfo;
-
-    @NotNull
     @Enumerated(value = EnumType.STRING)
     private VariantType type;
 
-    private Integer imagePosition;
+    @Valid
+    @Embedded
+    @JsonUnwrapped
+    private VariantIdentityInfo identityInfo = new VariantIdentityInfo();
 
-    private Integer imageId;
+    @Valid
+    @Embedded
+    @JsonUnwrapped
+    private VariantPricingInfo pricingInfo = new VariantPricingInfo();
+
+    @Valid
+    @Embedded
+    @JsonUnwrapped
+    private VariantOptionInfo optionInfo = new VariantOptionInfo();
+
+    @NotBlank
+    @Size(max = 1500)
+    private String title = VariantOptionInfo.DEFAULT_OPTION_VALUE;
+
+    @Valid
+    @JsonUnwrapped
+    @Embedded
+    private VariantInventoryManagementInfo inventoryManagementInfo = new VariantInventoryManagementInfo();
+
+    @Min(-1000)
+    @Max(1000)
+    @Setter
+    private int inventoryQuantity;
+
+    @Valid
+    @JsonUnwrapped
+    @Embedded
+    private VariantPhysicalInfo physicalInfo = new VariantPhysicalInfo();
+
+    @Min(0)
+    @Max(20000000)
+    private int grams;
+
+    @Convert(converter = ListIntegerConverter.class)
+    private List<Integer> imageIds;
+
+    @Setter
+    private int position = Integer.MAX_VALUE;
 
     private Instant createdOn;
 
     private Instant modifiedOn;
 
     public Variant(
-            Integer id,
-            Integer inventoryItemId,
+            int id,
+            int inventoryItemId,
             VariantIdentityInfo identityInfo,
             VariantPricingInfo pricingInfo,
             VariantOptionInfo optionInfo,
-            VariantInventoryInfo inventoryInfo,
+            VariantInventoryManagementInfo inventoryManagementInfo,
             VariantPhysicalInfo physicalInfo,
-            Integer imageId
+            Integer inventoryQuantity,
+            List<Integer> imageIds
     ) {
         this.id = id;
         this.inventoryItemId = inventoryItemId;
-        if (identityInfo != null)
+        if (identityInfo != null) {
             this.identityInfo = identityInfo;
-        if (pricingInfo != null)
-            this.pricingInfo = pricingInfo;
-
-        this.setOptionInfo(optionInfo);
-        if (inventoryInfo != null) {
-            this.inventoryInfo = inventoryInfo;
         }
-        this.setPhysicalInfo(physicalInfo);
-
+        if (physicalInfo != null) {
+            this.pricingInfo = pricingInfo;
+        }
+        setOptionInfo(optionInfo);
+        if (inventoryManagementInfo != null) {
+            this.inventoryManagementInfo = inventoryManagementInfo;
+        }
+        setPhysicalInfo(physicalInfo);
+        this.inventoryQuantity = inventoryQuantity;
+        this.imageIds = imageIds;
         this.createdOn = Instant.now();
         this.modifiedOn = Instant.now();
-
         this.type = VariantType.normal;
     }
 
-    private void setOptionInfo(VariantOptionInfo optionInfo) {
-        if (optionInfo == null || Objects.equals(this.optionInfo, optionInfo))
+    private void setPhysicalInfo(VariantPhysicalInfo physicalInfo) {
+        if (physicalInfo == null || physicalInfo.sameAs(this.physicalInfo)) {
             return;
+        }
 
-        // sử lý thêm thay đổi property
+        var diffs = this.physicalInfo.getDiffs(physicalInfo);
+        this.physicalInfo = physicalInfo;
+        this.grams = physicalInfo.weightInGram();
+        this.modifiedOn = Instant.now();
+
+        this.addDomainEvents(new PropertyChanged(this.id, diffs.stream().map(ObjectPropertyChange::new).toList()));
+    }
+
+    private void setOptionInfo(VariantOptionInfo optionInfo) {
+        if (optionInfo == null || optionInfo.sameAs(this.optionInfo)) {
+            return;
+        }
+
+        var diffs = this.optionInfo.getDiffs(optionInfo);
+
         this.optionInfo = optionInfo;
         this.title = optionInfo.getTitle();
         this.modifiedOn = Instant.now();
+
+        this.addDomainEvents(new PropertyChanged(this.id, diffs.stream().map(ObjectPropertyChange::new).toList()));
     }
 
-    private void setPhysicalInfo(VariantPhysicalInfo physicalInfo) {
-        if (physicalInfo == null || Objects.equals(this.physicalInfo, physicalInfo))
-            return;
-        this.physicalInfo = physicalInfo;
-        this.modifiedOn = Instant.now();
+    public void removeImage(int imageId) {
+        if (CollectionUtils.isNotEmpty(this.imageIds) || !imageIds.contains(imageId)) return;
+        this.imageIds.remove(imageId);
     }
 
-    public void setImage(Integer imageId) {
-        if (ObjectUtils.equals(imageId, this.imageId)) return;
-        this.imageId = imageId;
-        this.modifiedOn = Instant.now();
+    public void update(VariantUpdateInfo updatableInfo) {
+
+        setOptionInfo(updatableInfo.getOptionInfo());
+
+        if (updatableInfo.getIdentityInfo() != null && !this.getIdentityInfo().sameAs(updatableInfo.getIdentityInfo())) {
+            this.addDomainEvents(
+                    new PropertyChanged(this.id,
+                            this.getIdentityInfo()
+                                    .getDiffs(updatableInfo.getIdentityInfo()).stream()
+                                    .map(ObjectPropertyChange::new).toList()
+                    )
+            );
+            this.identityInfo = updatableInfo.getIdentityInfo();
+        }
+
+        if (updatableInfo.getPricingInfo() != null && !this.getPricingInfo().sameAs(updatableInfo.getPricingInfo())) {
+            this.addDomainEvents(
+                    new PropertyChanged(this.id,
+                            this.pricingInfo
+                                    .getDiffs(updatableInfo.getPricingInfo()).stream()
+                                    .map(ObjectPropertyChange::new).toList()
+                    )
+            );
+            this.pricingInfo = updatableInfo.getPricingInfo();
+        }
+
+        if (updatableInfo.getInventoryManagementInfo() != null && !this.inventoryManagementInfo.sameAs(updatableInfo.getInventoryManagementInfo())) {
+            this.addDomainEvents(
+                    new PropertyChanged(this.id,
+                            this.inventoryManagementInfo
+                                    .getDiffs(updatableInfo.getInventoryManagementInfo()).stream()
+                                    .map(ObjectPropertyChange::new).toList()
+                    )
+            );
+            this.inventoryManagementInfo = updatableInfo.getInventoryManagementInfo();
+        }
+
+        setPhysicalInfo(updatableInfo.getPhysicalInfo());
+
+        this.updateImageIds(updatableInfo.getImageIds());
+
+        this.position = updatableInfo.getPosition();
+
+        this.type = updatableInfo.getType() == null ? VariantType.normal : updatableInfo.getType();
+
+        if (this.inventoryQuantity != updatableInfo.getInventoryQuantity()) {
+            this.inventoryQuantity = updatableInfo.getInventoryQuantity();
+            this.addDomainEvents(
+                    new PropertyChanged(
+                            this.getId(),
+                            List.of(new ObjectPropertyChange(Triple.of("inventory_quantity", this.inventoryQuantity, updatableInfo.getOldInventoryQuantity())))
+                    )
+            );
+        }
+
     }
 
-    public void update(VariantUpdateInfo variantUpdateInfo) {
-        ///
+
+    private void updateImageIds(List<Integer> imageIds) {
+        this.imageIds = imageIds;
     }
 
     public enum VariantType {

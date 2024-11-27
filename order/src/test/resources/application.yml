@@ -1,0 +1,15 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb;MODE=MSSQLServer;CASE_INSENSITIVE_IDENTIFIERS=TRUE;IGNORECASE=TRUE
+    driver-class-name: org.h2.Driver
+  jpa:
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+        criteria:
+          literal_handling_mode: bind # Khi thực hiện truy vấn với Hibernate Criteria API, các giá trị sẽ được truyền theo kiểu bind paramater thay vì trèn trực tiếp vào câu lệnh SQL
+        current_session_context_class: org.springframework.orm.hibernate5.SpringContextSession
+    hibernate:
+      naming:
+        physical-strategy: org.hibernate.boot.model.naming.PhysicalNamingStrategyStandardImpl

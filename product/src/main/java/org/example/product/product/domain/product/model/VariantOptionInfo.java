@@ -1,34 +1,40 @@
 package org.example.product.product.domain.product.model;
 
-import jakarta.persistence.Embeddable;
-import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import org.apache.commons.lang3.StringUtils;
+import org.example.product.ddd.ValueObject;
+
+import javax.validation.constraints.NotBlank;
+import javax.validation.constraints.Size;
 
 @Getter
-@Embeddable
+@Builder
 @NoArgsConstructor
 @AllArgsConstructor
-@Builder(toBuilder = true)
-public class VariantOptionInfo {
-    public static final String DEFAULT_OPTION_VARIANT = "Default Title";
+public class VariantOptionInfo extends ValueObject<VariantOptionInfo> {
+    public static final String DEFAULT_OPTION_VALUE = "Default Title";
+    @NotBlank
+    @Builder.Default
     @Size(max = 500)
-    private String option1 = DEFAULT_OPTION_VARIANT;
+    private String option1 = DEFAULT_OPTION_VALUE;
+
     @Size(max = 500)
     private String option2;
+
     @Size(max = 500)
     private String option3;
 
+
     public String getTitle() {
-        var titleBuilder = new StringBuilder(this.option1);
-        if (StringUtils.isNotBlank(this.option2)) {
-            titleBuilder = titleBuilder.append(" / ").append(this.option2);
+        var titleBuilder = new StringBuilder(option1);
+        if (StringUtils.isNoneBlank(this.option2)) {
+            titleBuilder.append(" / ").append(option2);
         }
-        if (StringUtils.isNotBlank(this.option3)) {
-            titleBuilder = titleBuilder.append(" / ").append(this.option3);
+        if (StringUtils.isNoneBlank(this.option3)) {
+            titleBuilder.append(" / ").append(option3);
         }
         return titleBuilder.toString();
     }

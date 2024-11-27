@@ -1,23 +1,22 @@
 package org.example.product.product.domain.product.model;
 
 import jakarta.persistence.Embeddable;
-import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import org.example.product.ddd.ValueObject;
+
+import javax.validation.constraints.Size;
 
 @Getter
+@Builder
 @Embeddable
 @NoArgsConstructor
 @AllArgsConstructor
-@Builder(toBuilder = true)
-public class VariantIdentityInfo {
-    @NotNull
+public class VariantIdentityInfo extends ValueObject<VariantIdentityInfo> {
     @Size(max = 50)
     private String barcode;
-    @NotNull
     @Size(max = 50)
     private String sku;
 }

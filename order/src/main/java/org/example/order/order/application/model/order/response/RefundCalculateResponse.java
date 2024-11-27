@@ -1,10 +1,7 @@
 package org.example.order.order.application.model.order.response;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
-import lombok.AllArgsConstructor;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
-import lombok.Setter;
+import lombok.*;
 import lombok.experimental.Accessors;
 import org.example.order.order.domain.refund.model.RefundLineItem;
 
@@ -13,6 +10,7 @@ import java.util.List;
 
 @Getter
 @Setter
+@Builder
 public class RefundCalculateResponse {
 
     private Shipping shipping;
@@ -20,6 +18,8 @@ public class RefundCalculateResponse {
     private List<LineItem> refundableItems;
 
     private BigDecimal maximumRefundable;
+
+    private List<Transaction> transactions;
 
     @Getter
     @Setter
@@ -65,5 +65,20 @@ public class RefundCalculateResponse {
                     restockType, removal, lineItem
             );
         }
+    }
+
+    @Getter
+    @Setter
+    @Builder
+    public static class Transaction {
+        private int orderId;
+        private int parentId;
+        private String gateway;
+        @Builder.Default
+        private String kind = "suggested_refund";
+        @Builder.Default
+        private BigDecimal amount = BigDecimal.ZERO;
+        @Builder.Default
+        private BigDecimal maximumRefundable = BigDecimal.ZERO;
     }
 }

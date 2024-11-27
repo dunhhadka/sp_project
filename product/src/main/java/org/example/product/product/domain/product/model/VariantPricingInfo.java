@@ -1,30 +1,31 @@
 package org.example.product.product.domain.product.model;
 
 import jakarta.persistence.Embeddable;
-import jakarta.validation.constraints.DecimalMax;
-import jakarta.validation.constraints.DecimalMin;
-import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import org.example.product.ddd.ValueObject;
 
+import javax.validation.constraints.DecimalMax;
+import javax.validation.constraints.DecimalMin;
+import javax.validation.constraints.NotNull;
 import java.math.BigDecimal;
 
 @Getter
+@Builder
 @Embeddable
 @NoArgsConstructor
 @AllArgsConstructor
-@Builder(toBuilder = true)
-public class VariantPricingInfo {
+public class VariantPricingInfo extends ValueObject<VariantPricingInfo> {
     @NotNull
+    @Builder.Default
     @DecimalMin(value = "0")
-    @DecimalMax(value = "10000000000")
-    private BigDecimal price;
+    @DecimalMax(value = "1000000000")
+    private BigDecimal price = BigDecimal.ZERO;
 
-    @NotNull
     @DecimalMin(value = "0")
-    @DecimalMax(value = "10000000000")
+    @DecimalMax(value = "1000000000")
     private BigDecimal compareAtPrice;
 
     private boolean taxable;

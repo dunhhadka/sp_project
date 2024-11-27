@@ -21,6 +21,11 @@ public class JdbcOrderDao implements OrderDao {
     private static final Set<String> _filterableStatus = Set.of("open", "closed", "cancelled", "deleted");
 
     @Override
+    public OrderDto findById(int storeId, int id) {
+        return null;
+    }
+
+    @Override
     public OrderDto getByReference(int storeId, String reference) {
         return jdbcTemplate.queryForObject(
                 """

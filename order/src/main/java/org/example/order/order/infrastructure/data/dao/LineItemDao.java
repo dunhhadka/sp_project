@@ -6,4 +6,6 @@ import java.util.List;
 
 public interface LineItemDao {
     List<LineItemDto> getByOrderIds(int storeId, List<Integer> orderIds);
+
+    List<LineItemDto> getByIds(int storeId, List<Long> ids);
 }

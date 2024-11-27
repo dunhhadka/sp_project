@@ -1,1 +1,7 @@
-spring.application.name=account
+spring:
+  application:
+    name: account
+  data:
+    mongodb:
+      uri: mongodb+srv://hadung:XuzQu6OBCWjhYrUB@cluster0.lvkew.mongodb.net/?retryWrites=true&w=majority
+      database: accounts

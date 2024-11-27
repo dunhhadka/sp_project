@@ -12,6 +12,7 @@ import org.example.order.ddd.AggregateRoot;
 import org.example.order.order.application.exception.ConstrainViolationException;
 import org.example.order.order.application.utils.OrderHelper;
 import org.example.order.order.domain.refund.model.Refund;
+import org.example.order.order.domain.refund.model.RefundLineItem;
 import org.example.order.order.domain.transaction.model.OrderTransaction;
 import org.hibernate.annotations.Fetch;
 import org.hibernate.annotations.FetchMode;
@@ -43,8 +44,8 @@ public class Order extends AggregateRoot<Order> {
 
     @EmbeddedId
     @JsonUnwrapped
-    @AttributeOverride(name = "id", column = @Column(name = "id"))
     @AttributeOverride(name = "storeId", column = @Column(name = "storeId"))
+    @AttributeOverride(name = "id", column = @Column(name = "id"))
     private OrderId id;
 
     private Integer locationId;
@@ -76,6 +77,9 @@ public class Order extends AggregateRoot<Order> {
 
     @Enumerated(value = EnumType.STRING)
     private ReturnStatus returnStatus;
+
+    @Transient
+    private boolean restock;
 
     @Min(0)
     private int totalWeight;
@@ -147,10 +151,10 @@ public class Order extends AggregateRoot<Order> {
     @OneToMany(mappedBy = "aggRoot", fetch = FetchType.EAGER, cascade = CascadeType.ALL)
     @Fetch(FetchMode.SUBSELECT)
     @OrderBy("id desc")
-    private Set<Refund> refunds = new HashSet<>();
+    private Set<Refund> refunds = new LinkedHashSet<>();
 
-    private boolean taxExempt;
-    private boolean taxIncluded;
+    private boolean taxExempt; // đơn hàng không áp dụng thuế
+    private boolean taxIncluded; // đơn hàng đã bao gồm thuế
 
     @Version
     private Integer version;
@@ -210,6 +214,8 @@ public class Order extends AggregateRoot<Order> {
         this.initFinancialStatus();
 
         this.locationId = locationId == null ? null : locationId.intValue();
+
+        this.referenceInfo = new ReferenceInfo();
 
         this.createdOn = this.modifiedOn = Instant.now();
         this.setProcessOn(processOn, createdOn);
@@ -519,6 +525,114 @@ public class Order extends AggregateRoot<Order> {
 
     public void recalculatePamentState(List<OrderTransaction> transactions) {
         this.moneyInfo = OrderHelper.recalculateMoneyInfo(this, transactions);
+    }
+
+    public void addRefund(Refund refund) {
+        this.internalAddRefund(refund);
+        this.updateRefundedLineItemStatus(refund.getRefundLineItems());
+        this.recognizeRefund(refund);
+        var refundTransaction = TransactionInput.builder()
+                .kind(OrderTransaction.Kind.refund)
+                .amount(refund.getTotalRefund())
+                .build();
+        this.updateFinancialStatus(refundTransaction);
+    }
+
+    private void updateFinancialStatus(TransactionInput refundTransaction) {
+        var totalReceived = this.moneyInfo.getTotalReceived();
+        if (totalReceived.compareTo(BigDecimal.ZERO) > 0) {
+            var totalRefunded = this.moneyInfo.getTotalRefund();
+            if (totalRefunded.compareTo(BigDecimal.ZERO) > 0) {
+
+            }
+        }
+    }
+
+    private void recognizeRefund(Refund refund) {
+        // Tiền hoàn đã bao gồm khuyến mãi đơn hàng và sản phẩm
+        var refundedProductSubtotal = refund.getLineItemSubtotalRefunded();
+        // thuế hoàn của sản phẩm
+        var refundedProductTax = refund.getTotalLineItemTaxRefunded();
+        // Tiền giảm giá đơn hàng
+        var refundedCartLevelDiscount = refund.getTotalCartDiscountRefunded();
+        // tiền hoàn sản phẩm gốc không tính giảm giá
+        var refundedProductOriginalPrice = refund.getRefundedOriginalPrice();
+        // Tổng hoàn giảm giá sản phẩm và giảm giá đơn hàng
+        var refundedDiscount = refundedProductOriginalPrice.subtract(refundedProductSubtotal);
+
+        // Tổng hoàn của phí vận chuyển
+        var refundedShipping = refund.getTotalShippingRefunded();
+        // Tổng hoàn thuế vận chuyển
+        var refundedShippingTax = refund.getTotalShippingTaxRefunded();
+        //
+        var refundedTax = refundedProductTax.add(refundedShippingTax);
+
+        var currentTotalTax = this.moneyInfo.getTotalTax().subtract(refundedTax);
+
+        var currentCartDiscountAmount = this.moneyInfo.getCurrentCartDiscountAmount().subtract(refundedCartLevelDiscount);
+        var currentSubtotalPrice = this.moneyInfo.getCurrentSubtotalPrice().subtract(refundedProductSubtotal);
+        var currentTotalDiscount = this.moneyInfo.getCurrentTotalDiscount().subtract(refundedDiscount);
+        var currentTotalPrice = this.moneyInfo.getCurrentTotalPrice().subtract(refundedProductSubtotal);
+        if (!this.isTaxIncluded()) {
+            currentTotalPrice = currentTotalPrice.subtract(refundedTax);
+        }
+        var currentTotalPriceChange = this.moneyInfo.getCurrentTotalPrice().subtract(currentTotalPrice);
+
+        var refundUnpaidDeduction = Optional.ofNullable(refund.getOutstandingAdjustmentAmount()).orElse(BigDecimal.ZERO);
+        var refundedDiscrepancy = refund.getDiscrepancyAmount();
+
+        var refundAmount = refund.getTotalRefunded();
+        var totalRefunded = this.moneyInfo.getTotalRefund().add(refundAmount);
+
+        var netPay = this.moneyInfo.getNetPayment().subtract(refundAmount);
+
+        var unpaidAmountChanged = currentTotalPriceChange.subtract(refundAmount).add(refundUnpaidDeduction).subtract(refundedDiscrepancy);
+        var unpaidAmount = this.moneyInfo.getUnpaidAmount().subtract(unpaidAmountChanged);
+
+        var totalOutstanding = this.moneyInfo.getTotalOutstanding().subtract(unpaidAmountChanged);
+
+        var changedMoneyInfo = this.moneyInfo.toBuilder()
+                .currentTotalTax(currentTotalTax)
+                .currentCartDiscountAmount(currentCartDiscountAmount)
+                .currentSubtotalPrice(currentSubtotalPrice)
+                .currentTotalPrice(currentTotalPrice)
+                .netPayment(netPay)
+                .unpaidAmount(unpaidAmount)
+                .totalOutstanding(totalOutstanding)
+                .build();
+
+        this.changeMoneyInfo(changedMoneyInfo);
+    }
+
+    private void updateRefundedLineItemStatus(Set<RefundLineItem> refundLineItems) {
+        var refundItemMap = new HashMap<Integer, List<RefundLineItem>>();
+        for (var refundItem : refundLineItems) {
+            var lineItemId = refundItem.getLineItemId();
+            if (refundItemMap.containsKey(lineItemId)) {
+                refundItemMap.get(lineItemId).add(refundItem);
+            } else {
+                var refundItemMapValue = new ArrayList<RefundLineItem>();
+                refundItemMapValue.add(refundItem);
+                refundItemMap.put(lineItemId, refundItemMapValue);
+            }
+        }
+        for (var entry : refundItemMap.entrySet()) {
+            this.lineItems.stream()
+                    .filter(line -> line.getId() == entry.getKey())
+                    .findFirst().ifPresent(lineItem -> lineItem.refund(entry.getValue()));
+        }
+    }
+
+    private void internalAddRefund(Refund refund) {
+        this.restock = refund.isRestock();
+        if (this.refunds == null) this.refunds = new LinkedHashSet<>();
+        this.refunds.add(refund);
+        this.modifiedOn = Instant.now();
+    }
+
+    public BillingAddress getBillingAddress() {
+        if (CollectionUtils.isEmpty(this.billingAddresses)) return null;
+        return this.billingAddresses.get(0);
     }
 
     @Getter

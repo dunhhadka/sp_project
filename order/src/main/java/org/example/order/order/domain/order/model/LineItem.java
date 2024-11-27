@@ -9,6 +9,7 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.apache.commons.lang3.StringUtils;
 import org.example.order.order.application.utils.NumberUtils;
+import org.example.order.order.domain.refund.model.RefundLineItem;
 import org.hibernate.annotations.Fetch;
 import org.hibernate.annotations.FetchMode;
 import org.hibernate.annotations.Where;
@@ -34,8 +35,8 @@ public class LineItem {
     @JsonIgnore
     @ManyToOne
     @Setter(AccessLevel.PACKAGE)
-    @JoinColumn(name = "orderId", referencedColumnName = "id")
     @JoinColumn(name = "storeId", referencedColumnName = "storeId")
+    @JoinColumn(name = "orderId", referencedColumnName = "id")
     private Order aggRoot;
 
     @Id
@@ -235,6 +236,25 @@ public class LineItem {
 
     public BigDecimal getDiscountedPrice() {
         return this.price.subtract(totalDiscount);
+    }
+
+    public void refund(List<RefundLineItem> refundItems) {
+        for (var refundItem : refundItems) {
+            var refundQuantity = refundItem.getQuantity();
+            this.currentQuantity -= refundQuantity;
+            this.refundableQuantity -= refundQuantity;
+            if (refundItem.isRemoval()) {
+                this.fulfillableQuantity -= refundQuantity;
+                this.nonFulfillableQuantity += refundQuantity;
+            }
+        }
+
+        this.currentQuantity = Math.min(this.currentQuantity, 0);
+        this.refundableQuantity = Math.min(this.refundableQuantity, 0);
+        this.fulfillableQuantity = Math.min(fulfillableQuantity, 0);
+        this.nonFulfillableQuantity = Math.min(this.nonFulfillableQuantity, this.quantity);
+
+//        this.quantity => là số lượng gốc khi tạo đơn hàng
     }
 
     public enum FulfillmentStatus {

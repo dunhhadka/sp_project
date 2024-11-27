@@ -1,30 +1,39 @@
 package org.example.product.product.domain.product.model;
 
-import jakarta.persistence.Embeddable;
-import jakarta.validation.constraints.Max;
-import jakarta.validation.constraints.Min;
-import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
-import org.example.product.product.application.annotation.StringInList;
+import org.example.product.ddd.ValueObject;
+
+import javax.validation.constraints.Size;
 
 @Getter
-@Embeddable
-@NoArgsConstructor
+@Builder
 @AllArgsConstructor
-@Builder(toBuilder = true)
-public class VariantPhysicalInfo {
-    @NotNull
-    @Min(0)
-    @Max(2000000)
-    private Double weight;
+@NoArgsConstructor
+public class VariantPhysicalInfo extends ValueObject<VariantPhysicalInfo> {
 
-    @StringInList(array = {"kg", "g"})
-    private String weightUnit;
+    @Builder.Default
+    private boolean requireShipping = true;
+
+    @Builder.Default
+    private double weight = 0;
+
+    @Size(max = 20)
+    private String weightUnit = "kg";
 
     @Size(max = 50)
     private String unit;
+
+    public int weightInGram() {
+        double value = switch (weightUnit) {
+            case "kg" -> weight * 1000;
+            case "lb" -> weight / 0.0022046;
+            case "oz" -> weight / 0.035274;
+            default -> weight;
+        };
+        return (int) value;
+    }
+
 }

@@ -2,6 +2,7 @@ package org.example.order.order.infrastructure.data.dto;
 
 import lombok.Getter;
 import lombok.Setter;
+import org.apache.commons.lang3.StringUtils;
 import org.example.order.order.domain.order.model.LineItem;
 
 import java.math.BigDecimal;
@@ -55,4 +56,9 @@ public class LineItemDto {
     private String fulfillmentService;
 
     private Integer version;
+
+    public Long getCombinationLineId() {
+        if (StringUtils.isBlank(combinationLineKey)) return null;
+        return Long.valueOf(combinationLineKey.split("-")[0]);
+    }
 }

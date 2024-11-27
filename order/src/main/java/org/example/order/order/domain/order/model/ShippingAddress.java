@@ -19,8 +19,8 @@ public class ShippingAddress {
     @JsonIgnore
     @ManyToOne
     @Setter(AccessLevel.PACKAGE)
-    @JoinColumn(name = "orderId", referencedColumnName = "id")
     @JoinColumn(name = "storeId", referencedColumnName = "storeId")
+    @JoinColumn(name = "orderId", referencedColumnName = "id")
     private Order aggRoot;
 
     @Id

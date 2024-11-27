@@ -3,11 +3,11 @@ package org.example.order.order.application.service.order;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.lang3.ObjectUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.tuple.Pair;
 import org.example.order.order.application.exception.ConstrainViolationException;
 import org.example.order.order.application.exception.NotFoundException;
+import org.example.order.order.application.exception.UserError;
 import org.example.order.order.application.model.order.context.OrderCreatedEvent;
 import org.example.order.order.application.model.order.context.OrderCustomerContext;
 import org.example.order.order.application.model.order.request.OrderCreateRequest;
@@ -179,6 +179,166 @@ public class OrderWriteService {
         return order.getId();
     }
 
+    private OrderPaymentResult prepareOrderPayment(Order order, OrderCreateRequest request) {
+        List<Order.TransactionInput> transactionInputs = new ArrayList<>();
+        var checkoutToken = request.getCheckoutToken();
+        var transactionsRequest = request.getTransactions();
+        var storeId = order.getId().getStoreId();
+        var isFromCheckout = false; // Đơn từ online
+        List<Integer> paymentIds = new ArrayList<>();
+
+        // Kiểm tra payment và transactions của checkount
+        if (StringUtils.isNotBlank(checkoutToken)) {
+            var payments = new ArrayList<>(); // get payments từ db;
+            if (!CollectionUtils.isEmpty(payments)) {
+                paymentIds = new ArrayList<Integer>();
+                var checkoutTransactions = new ArrayList<>();
+                if (!CollectionUtils.isEmpty(checkoutTransactions)) {
+                    transactionInputs = new ArrayList<>(); // build transactionInputs
+                }
+            }
+            if (!CollectionUtils.isEmpty(transactionInputs)) isFromCheckout = true;
+        }
+
+        if (!isFromCheckout && !CollectionUtils.isEmpty(transactionsRequest)) {
+            preCheckTransactionsInput(transactionsRequest);
+            transactionInputs = transactionsRequest.stream()
+                    .map(txnReq -> {
+                        var requestKind = txnReq.getKind();
+                        var parentTransaction = determineParentTransactionInRequest(txnReq, transactionsRequest);
+                        var kind = OrderTransaction.Kind.capture.equals(requestKind)
+                                && (Objects.isNull(parentTransaction) || OrderTransaction.Kind.sale.equals(parentTransaction.getKind()))
+                                ? OrderTransaction.Kind.sale : requestKind;
+                        var status = OrderTransaction.Kind.capture.equals(requestKind)
+                                && (Objects.isNull(parentTransaction) || OrderTransaction.Kind.sale.equals(parentTransaction.getKind()))
+                                ? OrderTransaction.Status.success : txnReq.getStatus();
+
+                        return Order.TransactionInput.builder()
+                                .kind(kind)
+                                .status(status)
+                                .amount(txnReq.getAmount())
+                                .authorization(txnReq.getAuthorization())
+                                .gateway(txnReq.getGateway())
+                                .build();
+                    })
+                    .toList();
+        }
+
+        return OrderPaymentResult.builder()
+                .isFromCheckout(isFromCheckout)
+                .checkoutToken(checkoutToken)
+                .paymentIds(paymentIds)
+                .transactions(transactionInputs)
+                .build();
+    }
+
+    private TransactionCreateRequest determineParentTransactionInRequest(
+            TransactionCreateRequest transaction,
+            List<TransactionCreateRequest> transactionsRequest
+    ) {
+        // Tìm authorization, sale, capture success đầu tiên
+        int indexFirstAuthorization = -1;
+        int indexFirstSalePending = -1;
+        int indexFirstSale = -1;
+        int indexFirstCaptureSuccess = -1;
+
+        for (int i = 0; i < transactionsRequest.size(); i++) {
+            var transactionCreateRequest = transactionsRequest.get(i);
+
+            if (indexFirstAuthorization == -1
+                    && transactionCreateRequest.getKind() == OrderTransaction.Kind.authorization) {
+                indexFirstAuthorization = i;
+            }
+            if (indexFirstSalePending == -1
+                    && transactionCreateRequest.getKind() == OrderTransaction.Kind.sale
+                    && transactionCreateRequest.getStatus() == OrderTransaction.Status.pending) {
+                indexFirstSalePending = i;
+            }
+            if (indexFirstSale == -1
+                    && transactionCreateRequest.getKind() == OrderTransaction.Kind.sale) {
+                indexFirstSale = i;
+            }
+            if (indexFirstCaptureSuccess == -1
+                    && transactionCreateRequest.getKind() == OrderTransaction.Kind.capture
+                    && transactionCreateRequest.getStatus() == OrderTransaction.Status.success) {
+                indexFirstCaptureSuccess = i;
+            }
+
+            if (indexFirstAuthorization != -1 && indexFirstSale != -1) {
+                break;
+            }
+        }
+
+        return switch (transaction.getKind()) {
+            case capture ->
+                    findCaptureParentTransaction(transactionsRequest, indexFirstAuthorization, indexFirstSalePending);
+            case _void ->
+                    findVoidParentTransaction(transactionsRequest, indexFirstAuthorization, indexFirstSalePending);
+            case refund -> findRefundParentTransaction(transactionsRequest, indexFirstSale, indexFirstCaptureSuccess);
+            default -> null;
+        };
+    }
+
+    private TransactionCreateRequest findRefundParentTransaction(
+            List<TransactionCreateRequest> transactionsRequest,
+            int indexFirstSale,
+            int indexFirstCaptureSuccess
+    ) {
+        if (indexFirstSale == -1 && indexFirstCaptureSuccess == -1) {
+            return null;
+        } else if (indexFirstSale == -1) {
+            return transactionsRequest.get(indexFirstCaptureSuccess);
+        } else {
+            return transactionsRequest.get(indexFirstSale);
+        }
+    }
+
+    private TransactionCreateRequest findVoidParentTransaction(
+            List<TransactionCreateRequest> transactionsRequest,
+            int indexFirstAuthorization,
+            int indexFirstSalePending
+    ) {
+        if (indexFirstAuthorization == -1 && indexFirstSalePending == -1) {
+            return null;
+        } else if (indexFirstAuthorization != -1) {
+            return transactionsRequest.get(indexFirstAuthorization);
+        } else {
+            return transactionsRequest.get(indexFirstSalePending);
+        }
+    }
+
+    private TransactionCreateRequest findCaptureParentTransaction(
+            List<TransactionCreateRequest> transactionsRequest,
+            int indexFirstAuthorization,
+            int indexFirstSalePending
+    ) {
+        if (indexFirstAuthorization == -1 && indexFirstSalePending == -1) {
+            return null;
+        } else if (indexFirstAuthorization != -1) {
+            return transactionsRequest.get(indexFirstAuthorization);
+        } else {
+            return transactionsRequest.get(indexFirstSalePending);
+        }
+    }
+
+    private void preCheckTransactionsInput(List<TransactionCreateRequest> transactionsRequest) {
+        for (int i = 0; i < transactionsRequest.size(); i++) {
+            var request = transactionsRequest.get(i);
+            if (request.getAmount() == null) {
+                var resolvedErrorMessage = messageSource.getMessage(
+                        "transaction.error.create.amount.required",
+                        null,
+                        LocaleContextHolder.getLocale()
+                );
+                throw new ConstrainViolationException(UserError.builder()
+                        .code("required")
+                        .fields(List.of("transactions", String.valueOf(i), "amount"))
+                        .message(resolvedErrorMessage)
+                        .build());
+            }
+        }
+    }
+
     private OrderRoutingResponse processOrderRouting(Order order, Location location) {
         if (order.getLocationId() != null) {
             return routingToSpecificLocation(order, location);
@@ -229,122 +389,6 @@ public class OrderWriteService {
         return new OrderRoutingResponse(List.of(orderRoutingResult));
     }
 
-    private OrderPaymentResult prepareOrderPayment(Order order, OrderCreateRequest request) {
-        List<Order.TransactionInput> transactionInputs = new ArrayList<>();
-        var checkoutToken = request.getCheckoutToken();
-        var transactionRequest = request.getTransactions();
-        var storeId = order.getId().getStoreId();
-        var isFromCheckout = false;
-        List<Integer> paymentIds = new ArrayList<>();
-
-        if (CollectionUtils.isEmpty(transactionInputs) && !CollectionUtils.isEmpty(transactionRequest)) {
-            preCheckTransactionInputs(transactionRequest);
-            transactionInputs = transactionRequest.stream()
-                    .map(transactionReq -> {
-                        var requestedKind = transactionReq.getKind();
-                        var parentTransaction = determineParentTransactionInRequest(transactionReq, transactionRequest);
-                        return Order.TransactionInput.builder()
-                                .kind(requestedKind)
-                                .status(transactionReq.getStatus())
-                                .amount(transactionReq.getAmount())
-                                .authorization(transactionReq.getAuthorization())
-                                .gateway(transactionReq.getGateway())
-                                .build();
-                    })
-                    .toList();
-        }
-
-        return OrderPaymentResult.builder()
-                .isFromCheckout(isFromCheckout)
-                .checkoutToken(checkoutToken)
-                .paymentIds(paymentIds)
-                .transactions(transactionInputs)
-                .build();
-    }
-
-    private TransactionCreateRequest determineParentTransactionInRequest(
-            TransactionCreateRequest transaction,
-            List<TransactionCreateRequest> transactionRequest
-    ) {
-        int indexFirstAuthorization = -1;
-        int indexFirstSalePending = -1;
-        int indexFirstSale = -1;
-        int indexFirstCaptureSuccess = -1;
-
-        for (int i = 0; i < transactionRequest.size(); i++) {
-            var transactionCreateRequest = transactionRequest.get(i);
-
-            if (indexFirstAuthorization == -1 && transactionCreateRequest.getKind() == OrderTransaction.Kind.authorization) {
-                indexFirstAuthorization = i;
-            }
-            if (indexFirstSalePending == -1
-                    && transactionCreateRequest.getKind() == OrderTransaction.Kind.sale
-                    && OrderTransaction.Status.pending.equals(transactionCreateRequest.getStatus())) {
-                indexFirstSalePending = i;
-            }
-            if (indexFirstSale == -1 && transactionCreateRequest.getKind() == OrderTransaction.Kind.sale) {
-                indexFirstSale = i;
-            }
-            if (indexFirstCaptureSuccess == -1
-                    && OrderTransaction.Kind.capture.equals(transactionCreateRequest.getKind())
-                    && OrderTransaction.Status.success.equals(transactionCreateRequest.getStatus())) {
-                indexFirstCaptureSuccess = i;
-            }
-
-            if (indexFirstAuthorization != -1 && indexFirstSale != -1) {
-                break;
-            }
-        }
-
-        return switch (transaction.getKind()) {
-            case capture ->
-                    findCaptureParentTransaction(transactionRequest, indexFirstAuthorization, indexFirstSalePending);
-            case refund -> findRefundParentTransaction(transactionRequest, indexFirstSale, indexFirstCaptureSuccess);
-            default -> null;
-        };
-    }
-
-    private TransactionCreateRequest findRefundParentTransaction(
-            List<TransactionCreateRequest> transactionRequest,
-            int indexFirstSale,
-            int indexFirstCaptureSuccess
-    ) {
-        if (indexFirstSale == -1 && indexFirstCaptureSuccess == -1) {
-            return null;
-        } else if (indexFirstSale != -1) {
-            return transactionRequest.get(indexFirstSale);
-        } else {
-            return transactionRequest.get(indexFirstCaptureSuccess);
-        }
-    }
-
-    private TransactionCreateRequest findCaptureParentTransaction(
-            List<TransactionCreateRequest> transactionRequest,
-            int indexFirstAuthorization,
-            int indexFirstSalePending
-    ) {
-        if (indexFirstAuthorization == -1 && indexFirstSalePending == -1) {
-            return null;
-        } else if (indexFirstAuthorization != -1) {
-            return transactionRequest.get(indexFirstAuthorization);
-        } else {
-            return transactionRequest.get(indexFirstSalePending);
-        }
-    }
-
-    private void preCheckTransactionInputs(List<TransactionCreateRequest> transactionRequest) {
-        for (int i = 0; i < transactionRequest.size(); i++) {
-            var value = transactionRequest.get(i);
-            if (value.getAmount() == null) {
-                var resolvedErrorMessage = messageSource.getMessage(
-                        "transaction.error.create.amount.required",
-                        null,
-                        LocaleContextHolder.getLocale()
-                );
-                throw new ConstrainViolationException("transaction", resolvedErrorMessage);
-            }
-        }
-    }
 
     private Location validateLocation(Integer storeId, OrderCreateRequest orderRequest) {
         var locationId = orderRequest.getLocationId();
@@ -1229,7 +1273,7 @@ public class OrderWriteService {
         return storeCurrency == null ? Order.DEFAUT_CURRENCY : storeCurrency;
     }
 
-    private void validateCurrency(String currencyCode) {
+    public static void validateCurrency(String currencyCode) {
         var currency = SupportCurrencies.getByCode(currencyCode);
         if (currency == null) {
             throw new ConstrainViolationException("currency", "not supported");
@@ -1246,13 +1290,6 @@ public class OrderWriteService {
     }
 
     private RefundResult addRefund(Order order, RefundRequest refundRequest) {
-        var moneyInfo = order.getMoneyInfo();
-        if (ObjectUtils.anyNotNull(moneyInfo.getTotalReceived(), moneyInfo.getNetPayment())) {
-            log.warn("Order {} has no total received and net payment", order.getId());
-            var transactions = transactionRepository.findByOrderId(order.getId());
-            order.recalculatePamentState(transactions);
-        }
-
         var refundResult = buildRefund(order, refundRequest);
         return null;
     }
@@ -1261,47 +1298,22 @@ public class OrderWriteService {
         var suggestedRefund = calculationService.calculateRefund(order, refundRequest);
         var refundLineItems = buildRefundLineItems(suggestedRefund);
 
-        var refundTransactions = buildRefundTransactions(
+        var refundTransaction = buildRefundTransaction(
                 suggestedRefund, order, refundRequest.getTransactions());
+
         var orderAdjustments = buildOrderAdjustment(
-                suggestedRefund, refundLineItems, refundTransactions, order);
+                suggestedRefund, refundLineItems, refundTransaction, order);
         return null;
     }
 
-    private Set<OrderAdjustment> buildOrderAdjustment(
-            RefundCalculateResponse suggestedRefund,
-            Set<RefundLineItem> refundLineItems,
-            List<TransactionCreateRequest> refundTransactions,
-            Order order
-    ) {
-        var transactions = transactionRepository.findByOrderId(order.getId());
-        var customerSpent = transactions.stream().anyMatch(OrderTransaction::isCaptureOrSaleSuccess);
-        var refundAllItems = this.isRefundAllItems(suggestedRefund, refundLineItems);
-
-        if (!customerSpent) {
-
-        }
-        return null;
+    private Set<OrderAdjustment> buildOrderAdjustment(RefundCalculateResponse suggestedRefund, Set<RefundLineItem> refundLineItems, List<TransactionCreateRequest> refundTransaction, Order order) {
+        return new LinkedHashSet<>();
     }
 
-    private boolean isRefundAllItems(RefundCalculateResponse suggestedRefund, Set<RefundLineItem> refundLineItems) {
-        if (suggestedRefund.getRefundableItems().isEmpty()) return true;
-        var maxRefundableQuantity = suggestedRefund.getRefundableItems().stream()
-                .map(RefundCalculateResponse.LineItem::getMaximumRefundableQuantity)
-                .mapToLong(value -> (long) value)
-                .sum();
-        var totalRefundQuantity = refundLineItems.stream()
-                .map(RefundLineItem::getQuantity)
-                .mapToLong(value -> (long) value)
-                .sum();
-        return maxRefundableQuantity == totalRefundQuantity;
-    }
-
-    private List<TransactionCreateRequest> buildRefundTransactions(
+    private List<TransactionCreateRequest> buildRefundTransaction(
             RefundCalculateResponse suggestedRefund,
             Order order,
-            List<TransactionCreateRequest> inputTransactions
-    ) {
+            List<TransactionCreateRequest> inputTransactions) {
         if (CollectionUtils.isEmpty(inputTransactions)) {
             return List.of();
         }
@@ -1309,6 +1321,7 @@ public class OrderWriteService {
                 .filter(request -> {
                     if (!NumberUtils.isPositive(request.getAmount())) return false;
                     request.setKind(OrderTransaction.Kind.refund);
+                    request.setSourceName("");
                     request.setStatus(OrderTransaction.Status.success);
                     return true;
                 })
@@ -1320,52 +1333,44 @@ public class OrderWriteService {
         var orderTransactions = transactionRepository.findByOrderId(order.getId());
         for (var refundTransaction : refundTransactionRequests) {
             var valid = true;
-            if (refundTransaction.getParentId() == null || refundTransaction.getParentId() <= 0) {
+            if (!NumberUtils.isPositive(refundTransaction.getParentId())) {
                 valid = false;
             } else {
                 valid = orderTransactions.stream()
-                        .anyMatch(trans -> Objects.equals(trans.getId().getId(), refundTransaction.getParentId()));
+                        .anyMatch(tran -> tran.getId().getId() == refundTransaction.getParentId());
             }
             if (!valid) {
                 throw new ConstrainViolationException(
                         "transactions",
-                        "not on 'store-credit' or 'cash' gateways require a parent_id"
+                        "12"
                 );
             }
         }
 
-        var requestAmount = refundTransactionRequests.stream()
+        var requestedAmount = refundTransactionRequests.stream()
                 .map(TransactionCreateRequest::getAmount)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
-        validateTotalRefundAmount(suggestedRefund.getMaximumRefundable(), requestAmount, order.getMoneyInfo().getCurrency());
         return refundTransactionRequests;
-    }
-
-    private void validateTotalRefundAmount(
-            BigDecimal maximumRefundable,
-            BigDecimal requestAmount,
-            Currency currency
-    ) {
-
     }
 
     private Set<RefundLineItem> buildRefundLineItems(RefundCalculateResponse suggestedRefund) {
         var suggestedRefundLineItems = suggestedRefund.getRefundItems();
         if (CollectionUtils.isEmpty(suggestedRefundLineItems)) {
-            return new HashSet<>(0);
+            return new LinkedHashSet<>();
         }
         var ids = orderIdGenerator.generateRefundLineIds(suggestedRefundLineItems.size());
         return suggestedRefundLineItems.stream()
-                .map(suggestedRefundLineItem -> new RefundLineItem(ids.removeFirst(), suggestedRefundLineItem))
-                .collect(Collectors.toSet());
+                .map(line -> new RefundLineItem(ids.removeFirst(), line))
+                .collect(Collectors.toCollection(LinkedHashSet::new));
     }
 
-    public record RefundResult(Refund refund, List<TransactionCreateRequest> transactions) {
+    record RefundResult(Refund refund, List<TransactionCreateRequest> transactions) {
     }
 
     private Order findOrderById(OrderId orderId) {
         var order = orderRepository.findById(orderId);
-        if (order != null && order.getStatus() != Order.OrderStatus.deleted) return order;
-        throw new NotFoundException();
+        if (order == null) throw new NotFoundException("order not found by id = " + orderId.toString());
+        if (order.getClosedOn() != null) throw new ConstrainViolationException("order ", ":");
+        return order;
     }
 }

@@ -3,80 +3,94 @@ package org.example.product.product.domain.product.model;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonUnwrapped;
 import jakarta.persistence.*;
-import jakarta.validation.Valid;
-import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Size;
-import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
-import org.apache.commons.lang3.ObjectUtils;
+import org.apache.commons.lang3.StringUtils;
+import org.hibernate.annotations.DynamicUpdate;
 
+import javax.validation.constraints.NotNull;
+import javax.validation.constraints.Size;
 import java.time.Instant;
+import java.util.Objects;
 
 @Entity
-@Table(name = "ProductImages")
+@Table(name = "images")
+@DynamicUpdate
 @Getter
-@NoArgsConstructor(access = AccessLevel.PROTECTED)
+@NoArgsConstructor
 public class Image {
 
     @JsonIgnore
     @ManyToOne
-    @Setter(AccessLevel.PACKAGE)
     @JoinColumn(name = "storeId", referencedColumnName = "storeId")
     @JoinColumn(name = "productId", referencedColumnName = "id")
+    @Setter
     private Product aggRoot;
 
     @Id
     private int id;
 
     @NotNull
-    private String src;
+    @Setter
+    private int position = Integer.MAX_VALUE;
+
     @NotNull
-    private String fileName;
+    private Instant createdOn;
+
     @NotNull
+    private Instant modifiedOn;
+
     @Size(max = 255)
     private String alt;
+
     @NotNull
-    private int position;
+    private String src;
+
+    @NotNull
+    private String fileName;
 
     @Embedded
     @JsonUnwrapped
-    private @Valid ImagePhysicalInfo physicalInfo;
-
-    private Instant createdAt;
-    private Instant modifiedAt;
+    private ImagePhysicalInfo physicalInfo;
 
     public Image(
             Integer id,
+            int position,
+            String alt,
             String src,
             String fileName,
-            String alt,
-            Integer position,
             ImagePhysicalInfo physicalInfo
     ) {
         this.id = id;
+        this.position = position;
+        this.alt = alt;
         this.src = src;
         this.fileName = fileName;
-        this.alt = alt;
-        this.position = position;
-        this.physicalInfo = physicalInfo;
-
-        this.createdAt = Instant.now();
-        this.modifiedAt = Instant.now();
+        if (physicalInfo != null) {
+            this.physicalInfo = physicalInfo;
+        }
+        this.createdOn = Instant.now();
+        this.modifiedOn = Instant.now();
     }
 
-    public void update(ImageUpdatableInfo imageUpdatableInfo) {
-        this.alt = imageUpdatableInfo.getAlt();
-        this.src = imageUpdatableInfo.getSrc();
-        this.fileName = imageUpdatableInfo.getFileName();
-        this.position = imageUpdatableInfo.getPosition();
-        this.setPhysicalInfo(imageUpdatableInfo.getPhysicalInfo());
-    }
+    public void update(ImageUpdatableInfo imageUpdate) {
+        if (!StringUtils.equals(this.alt, imageUpdate.getAlt())) {
+            this.alt = imageUpdate.getAlt();
+        }
+        if (!StringUtils.equals(this.src, imageUpdate.getSrc())) {
+            this.src = imageUpdate.getSrc();
+        }
+        if (!StringUtils.equals(this.fileName, imageUpdate.getFileName())) {
+            this.fileName = imageUpdate.getFileName();
+        }
+        if (!Objects.equals(this.position, imageUpdate.getPosition())) {
+            this.position = imageUpdate.getPosition();
+        }
+        if (!Objects.equals(this.physicalInfo, imageUpdate.getPhysicalInfo())) {
+            this.physicalInfo = imageUpdate.getPhysicalInfo();
+        }
 
-    private void setPhysicalInfo(ImagePhysicalInfo physicalInfo) {
-        if (physicalInfo == null || ObjectUtils.equals(physicalInfo, this.getPhysicalInfo()))
-            return;
-        this.physicalInfo = physicalInfo;
+        this.modifiedOn = Instant.now();
     }
 }

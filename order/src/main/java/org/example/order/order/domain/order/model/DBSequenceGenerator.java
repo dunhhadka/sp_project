@@ -93,4 +93,14 @@ public class DBSequenceGenerator implements OrderIdGenerator {
     public Deque<Integer> generateRefundLineIds(int size) {
         return null;
     }
+
+    @Override
+    public int generateAdjustmentId() {
+        return 0;
+    }
+
+    @Override
+    public int generateRefundId() {
+        return 0;
+    }
 }

@@ -58,7 +58,7 @@ public class OrderCacheService {
                     var value = entry.getValue();
                     result.add(ProductImageCache.builder()
                             .productId(productIds.get(i))
-                            .variantId(Integer.parseInt(field.replace(PREFIX_IMAGE_ORDER_CACHE, "")))
+                            .variantId(Integer.parseInt(field.replaceFirst(PREFIX_IMAGE_ORDER_CACHE, "")))
                             .imageUrl(value)
                             .build());
                 }

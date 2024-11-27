@@ -7,6 +7,9 @@
   </component>
   <component name="ExternalStorageConfigurationManager" enabled="true" />
   <component name="FrameworkDetectionExcludesConfiguration">
+    <file type="web" url="file://$PROJECT_DIR$/account" />
+    <file type="web" url="file://$PROJECT_DIR$/eurekaserver" />
+    <file type="web" url="file://$PROJECT_DIR$/gateway-service" />
     <file type="web" url="file://$PROJECT_DIR$/product" />
   </component>
   <component name="MavenProjectsManager">

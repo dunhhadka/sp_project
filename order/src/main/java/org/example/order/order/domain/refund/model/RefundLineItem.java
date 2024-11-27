@@ -19,9 +19,11 @@ public class RefundLineItem {
 
     @JsonIgnore
     @ManyToOne
-    @JoinColumn(name = "storeId", referencedColumnName = "storeId")
-    @JoinColumn(name = "orderId", referencedColumnName = "orderId")
-    @JoinColumn(name = "refundId", referencedColumnName = "id")
+    @JoinColumns({
+//            @JoinColumn(name = "storeId", referencedColumnName = "storeId"),
+//            @JoinColumn(name = "orderId", referencedColumnName = "orderId"),
+            @JoinColumn(name = "refundId", referencedColumnName = "id")
+    })
     private Refund refund;
 
     @Id
@@ -65,11 +67,16 @@ public class RefundLineItem {
         this.totalCartDiscount = suggestedLineItem.getTotalCartDiscount();
     }
 
+    @JsonIgnore
+    public BigDecimal getTotalOriginalPrice() {
+        return this.price.multiply(BigDecimal.valueOf(this.quantity));
+    }
+
     @Getter
     public enum RestockType implements CustomValueEnum<String> {
         no_restock("no_restock"),
-        cancel("cancel"),
-        _return("return"),
+        cancel("cancel"), // trong quá trình giao hàng => trả
+        _return("return"), // khách nhận hàng rồi trả
         legacy_restock("legacy_restock");
 
         private final String value;

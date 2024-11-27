@@ -2,9 +2,15 @@ package org.example.order.order.application.utils;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategy;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.util.ISO8601DateFormat;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import lombok.SneakyThrows;
 import org.apache.commons.lang3.StringUtils;
+import org.example.order.order.domain.order.model.es.OrderEsModel;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -17,6 +23,12 @@ public final class JsonUtils {
     private static ObjectMapper createObjectMapper() {
         var mapper = new ObjectMapper();
         mapper.setPropertyNamingStrategy(PropertyNamingStrategy.SNAKE_CASE);
+        mapper.configure(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS, false);
+        mapper.disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+        mapper.setDateFormat(new ISO8601DateFormat());
+
+        // Register the JavaTimeModule to handle Java 8 date/time types
+        mapper.registerModule(new JavaTimeModule());
         return mapper;
     }
 
@@ -44,5 +56,34 @@ public final class JsonUtils {
 
     public static <T> T unmarshal(String s, Class<T> clazz) throws JsonProcessingException {
         return mapper.readValue(s, clazz);
+    }
+
+    @SneakyThrows
+    public static String marshalLog(Object obj) {
+        return marshal(obj);
+    }
+
+    public static <T> T unmarshalEsData(String data, Class<T> clazz) {
+        try {
+            return mapper.readValue(data, clazz);
+        } catch (JsonProcessingException e) {
+            throw new IllegalArgumentException("Can't deserialize: " + e.getMessage() + data);
+        }
+    }
+
+    public static byte[] marshalAsByte(OrderEsModel esOrder) {
+        try {
+            return mapper.writeValueAsBytes(esOrder);
+        } catch (JsonProcessingException e) {
+            throw new IllegalArgumentException("Can't serialize: " + e.getMessage(), e);
+        }
+    }
+
+    public static <T> String marshalAsJson(T object) {
+        try {
+            return mapper.writeValueAsString(object);
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException(e);
+        }
     }
 }

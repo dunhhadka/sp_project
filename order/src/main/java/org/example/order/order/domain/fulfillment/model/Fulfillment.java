@@ -7,13 +7,16 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import org.example.order.ddd.AggregateRoot;
+import org.example.order.order.application.utils.NumberUtils;
 import org.hibernate.annotations.Fetch;
 import org.hibernate.annotations.FetchMode;
+import org.springframework.util.CollectionUtils;
 
 import javax.validation.Valid;
 import javax.validation.constraints.Size;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 @Getter
 @Entity
@@ -87,6 +90,21 @@ public class Fulfillment extends AggregateRoot<Fulfillment> {
     @Enumerated(value = EnumType.STRING)
     private DeliveryMethod deliveryMethod;
 
+    public void updateEffectiveQuantity(Map<Long, Integer> modifiedMap, EffectQuantityType effectQuantityType) {
+        if (CollectionUtils.isEmpty(modifiedMap) || CollectionUtils.isEmpty(this.lineItems)) return;
+        for (var lineItem : lineItems) {
+            var modifiedQuantity = modifiedMap.get((long) lineItem.getLineItemId());
+            if (!NumberUtils.isPositive(modifiedQuantity)) {
+                continue;
+            }
+            var effectiveLineQuantity = lineItem.getEffectiveQuantity();
+            var newQuantity = effectQuantityType == EffectQuantityType.add
+                    ? effectiveLineQuantity + modifiedQuantity
+                    : effectiveLineQuantity - modifiedQuantity;
+            lineItem.updateEffectiveQuantity(newQuantity);
+        }
+    }
+
     public enum DeliveryMethod {
         // không vận chuyển
         none,
@@ -118,5 +136,9 @@ public class Fulfillment extends AggregateRoot<Fulfillment> {
 
     public enum ShipmentStatus {
         pending, delivering, delivered, returning, returned, cancelled, failed, retry_delivery, ready_to_pick, picked_up
+    }
+
+    public enum EffectQuantityType {
+        add, subtract
     }
 }

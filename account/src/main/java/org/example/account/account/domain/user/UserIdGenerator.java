@@ -1,4 +1,4 @@
 package org.example.account.account.domain.user;
 
-public interface UserGenerator {
+public interface UserIdGenerator {
 }

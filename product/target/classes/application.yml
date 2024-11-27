@@ -1,0 +1,25 @@
+spring:
+  application:
+    name: product
+  datasource:
+    driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+    url: jdbc:sqlserver://localhost:60387;databaseName=BizwebStores;encrypt=true;trustServerCertificate=true
+    username: sa
+    password: 123456
+  jpa:
+    hibernate:
+      naming:
+        physical-strategy: org.hibernate.boot.model.naming.CamelCaseToUnderscoresNamingStrategy
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+web:
+  cloud-url: cloudinary://555627755687196:cGvOw5rPyVIsLUZ231M_H1rQaHA@dcfbaknh6
+
+cloudinary:
+  cloudName: dcfbaknh6
+  apiKey: 555627755687196
+  apiSecret: cGvOw5rPyVIsLUZ231M_H1rQaHA

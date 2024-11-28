@@ -3,6 +3,9 @@ package org.example.order.order.application.service.orderedit;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import lombok.AccessLevel;
 import lombok.NoArgsConstructor;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.tuple.Pair;
+import org.example.order.order.application.exception.ConstrainViolationException;
 import org.example.order.order.application.utils.JsonUtils;
 import org.example.order.order.domain.order.model.BillingAddress;
 import org.example.order.order.domain.order.model.MailingAddress;
@@ -14,6 +17,7 @@ import org.example.order.order.infrastructure.data.dto.OrderStagedChangeDto;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
@@ -81,6 +85,23 @@ public final class OrderEditUtils {
                         Optional.ofNullable(order.getShippingAddress()).map(ShippingAddress::getAddressInfo))
                 .map(MailingAddress::getCountryCode)
                 .orElse("VND");
+    }
+
+    public static Pair<Integer, UUID> resolveLineItemId(String lineItemIdInput) {
+        if (StringUtils.isBlank(lineItemIdInput)) {
+            throw new ConstrainViolationException("line_item_id", "require not null");
+        }
+        try {
+            if (lineItemIdInput.contains("-")) {
+                var lineItemId = UUID.fromString(lineItemIdInput);
+                return Pair.of(null, lineItemId);
+            } else {
+                Integer lineItemId = Integer.parseInt(lineItemIdInput);
+                return Pair.of(lineItemId, null);
+            }
+        } catch (Exception e) {
+            throw new ConstrainViolationException("line_item_id", "can not parse to id");
+        }
     }
 
     public record GroupedStagedChange(

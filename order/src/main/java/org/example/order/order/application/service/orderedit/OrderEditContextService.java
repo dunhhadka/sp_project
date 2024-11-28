@@ -11,9 +11,11 @@ import org.example.order.order.application.model.order.request.LocationFilter;
 import org.example.order.order.application.utils.NumberUtils;
 import org.example.order.order.application.utils.TaxHelper;
 import org.example.order.order.application.utils.TaxSetting;
+import org.example.order.order.domain.order.model.LineItem;
 import org.example.order.order.domain.order.model.Order;
 import org.example.order.order.domain.order.model.OrderId;
 import org.example.order.order.domain.order.persistence.OrderRepository;
+import org.example.order.order.domain.orderedit.model.AddedLineItem;
 import org.example.order.order.domain.orderedit.model.OrderEdit;
 import org.example.order.order.domain.orderedit.model.OrderEditId;
 import org.example.order.order.domain.orderedit.persistence.OrderEditRepository;
@@ -37,6 +39,59 @@ public class OrderEditContextService {
     private final OrderRepository orderRepository;
     private final SapoClient sapoClient;
     private final TaxHelper taxHelper;
+
+    public interface IncrementContext extends NeedTax, EditContext {
+        LineItemInfo lineItemInfo();
+
+        Location location();
+    }
+
+    public record LineItemInfo(LineItem lineItem, AddedLineItem addedLineItem) {
+    }
+
+    public IncrementContext getIncrementLineItemContext(OrderEditId orderEditId, OrderEditRequest.Increment increment) {
+        return new IncrementContextImpl(orderEditId, increment);
+    }
+
+    private class IncrementContextImpl extends AbstractContext<OrderEditRequest.Increment>
+            implements IncrementContext {
+
+        private final LineItemInfo lineItemInfo;
+        private final TaxSetting taxSetting;
+        private final Map<Long, Location> locations;
+
+        public IncrementContextImpl(OrderEditId orderEditId, OrderEditRequest.Increment increment) {
+            super(orderEditId, increment);
+
+            lineItemInfo = fetchLineItem(increment.getLineItemId());
+
+            Long locationId = increment.getLocationId() == null ? null : increment.getLocationId().longValue();
+            locations = needLocations(locationId == null ? List.of() : List.of(locationId),
+                    locationId != null);
+
+            Set<Integer> lineItemIds = new HashSet<>();
+            lineItemIds.add(0);
+            if (lineItemInfo.lineItem != null)
+                lineItemIds.add(lineItemInfo.lineItem.getId());
+            taxSetting = needTaxes(lineItemIds);
+        }
+
+        @Override
+        public TaxSetting taxSetting() {
+            return taxSetting;
+        }
+
+        @Override
+        public LineItemInfo lineItemInfo() {
+            return lineItemInfo;
+        }
+
+        @Override
+        public Location location() {
+            Long locationId = requst().getLocationId() == null ? null : requst().getLocationId().longValue();
+            return locations.getOrDefault(locationId, locations.get(null));
+        }
+    }
 
     public interface EditContext {
         OrderEdit orderEdit();
@@ -64,6 +119,17 @@ public class OrderEditContextService {
 
         private int storeId() {
             return this.orderEdit.getId().getStoreId();
+        }
+
+        private Order order() {
+            if (order == null) {
+                throw new ConstrainViolationException("order", "require order");
+            }
+            return order;
+        }
+
+        protected T requst() {
+            return request;
         }
 
         private void fetchOrder() {
@@ -175,6 +241,50 @@ public class OrderEditContextService {
 
             return taxHelper.getTaxSetting(storeId(), countryCode, productIds);
         }
+
+        protected LineItemPair fetchLineItemInfo() {
+            fetchOrder();
+
+            Map<Integer, LineItem> lineItems = order().getLineItems().stream()
+                    .collect(Collectors.toMap(
+                            LineItem::getId,
+                            Function.identity()));
+            Map<UUID, AddedLineItem> addedLineItems = orderEdit().getLineItems().stream()
+                    .collect(Collectors.toMap(
+                            AddedLineItem::getId,
+                            Function.identity()));
+
+            return new LineItemPair(lineItems, addedLineItems);
+        }
+
+        protected LineItemInfo fetchLineItem(String lineItemIdRequest) {
+            var lineItemInfo = fetchLineItemInfo();
+            Map<Integer, LineItem> lineItems = lineItemInfo.lineItems;
+            Map<UUID, AddedLineItem> addedLineItems = lineItemInfo.addedLineItems;
+
+            var lineItemIdPair = OrderEditUtils.resolveLineItemId(lineItemIdRequest);
+
+            LineItem lineItem = null;
+            AddedLineItem addedLineItem = null;
+            if (lineItemIdPair.getLeft() != null) {
+                lineItem = lineItems.get(lineItemIdPair.getKey());
+            } else if (lineItemIdPair.getValue() != null) {
+                addedLineItem = addedLineItems.get(lineItemIdPair.getValue());
+            }
+            if (lineItem == null && addedLineItem == null) {
+                throw new ConstrainViolationException(
+                        "line_item",
+                        "line_item not found by id = " + lineItemIdRequest);
+            }
+
+            return new LineItemInfo(lineItem, addedLineItem);
+        }
+
+        public record LineItemPair(
+                Map<Integer, LineItem> lineItems,
+                Map<UUID, AddedLineItem> addedLineItems
+        ) {
+        }
     }
 
 
@@ -253,4 +363,5 @@ public class OrderEditContextService {
             return this.taxSetting;
         }
     }
+
 }

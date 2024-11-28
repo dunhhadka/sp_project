@@ -82,4 +82,13 @@ public class AddedTaxLine {
         }
         return amount;
     }
+
+    public BigDecimal adjustQuantity(BigDecimal quantity, BigDecimal editableSubtotal, Currency currency, boolean taxIncluded) {
+        this.quantity = quantity;
+        BigDecimal originalPrice = this.price;
+        this.price = this.calculatePrice(editableSubtotal, currency, taxIncluded);
+        this.updateAt = Instant.now();
+
+        return this.price.subtract(originalPrice);
+    }
 }

@@ -35,6 +35,16 @@ public class OrderEditController {
                                          @RequestBody @Valid OrderEditRequest.AddVariants addVariants) {
         var orderEditId = new OrderEditId(storeId, id);
         List<UUID> lineItemIds = orderEditWriteService.addVariants(orderEditId, addVariants);
+        return orderEditReadService.getAddVariants(orderEditId, lineItemIds);
+    }
+
+    @PostMapping("/increment/{editId}")
+    public OrderEditResponse increaseLineItemQuantity(@PathVariable int editId,
+                                                      @StoreId Integer storeId,
+                                                      @RequestBody @Valid OrderEditRequest.Increment increment
+    ) {
+        var orderEditId = new OrderEditId(storeId, editId);
+        var lineItemId = orderEditWriteService.increaseLineItem(orderEditId, increment);
         return orderEditReadService.getBeginEdit(orderEditId);
     }
 }

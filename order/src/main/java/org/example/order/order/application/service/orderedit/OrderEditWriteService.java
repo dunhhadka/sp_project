@@ -138,6 +138,8 @@ public class OrderEditWriteService {
                 totalOutStanding
         );
 
+        orderEditRepository.save(orderEdit);
+
         return orderEdit.getId();
     }
 
@@ -205,5 +207,21 @@ public class OrderEditWriteService {
                 variant.isRequiresShipping(),
                 true
         );
+    }
+
+    /**
+     * edit quantity có thể có edit 2 loại: edit addedLineItem, edit lineItem
+     * => context: lineItem or addedLineItem, taxSetting, location
+     */
+    @Transactional
+    public String increaseLineItem(OrderEditId orderEditId, OrderEditRequest.Increment increment) {
+        var context = orderEditContextService.getIncrementLineItemContext(orderEditId, increment);
+
+        var orderEdit = context.orderEdit();
+
+        orderEdit.increaseLineItemQuantity(context, increment);
+
+        orderEditRepository.save(orderEdit);
+        return increment.getLineItemId();
     }
 }

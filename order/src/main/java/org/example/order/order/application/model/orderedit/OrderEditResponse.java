@@ -17,6 +17,7 @@ public class OrderEditResponse {
     private List<CalculatedLineItem> calculatedLineItems;
     // result of add_item_discount
     private OrderStagedChangeModel stagedChange;
+    private List<OrderStagedChangeModel> stagedChanges;
     // committed order
     private OrderResponse order;
 }

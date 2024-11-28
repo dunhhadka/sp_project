@@ -1,10 +1,16 @@
 package org.example.order.order.domain.orderedit.model;
 
 import com.fasterxml.jackson.annotation.JsonUnwrapped;
+import com.google.common.base.Preconditions;
 import jakarta.persistence.*;
 import lombok.Getter;
+import org.apache.commons.collections4.CollectionUtils;
 import org.example.order.ddd.AggregateRoot;
+import org.example.order.order.application.exception.ConstrainViolationException;
+import org.example.order.order.application.service.orderedit.OrderEditContextService;
+import org.example.order.order.application.service.orderedit.OrderEditRequest;
 import org.example.order.order.application.utils.TaxSetting;
+import org.example.order.order.application.utils.TaxSettingValue;
 import org.example.order.order.domain.order.model.OrderId;
 import org.hibernate.annotations.DynamicUpdate;
 import org.hibernate.annotations.Fetch;
@@ -15,10 +21,9 @@ import javax.validation.constraints.Min;
 import javax.validation.constraints.NotNull;
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.Currency;
-import java.util.List;
-import java.util.UUID;
+import java.util.*;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Entity
 @Getter
@@ -127,6 +132,7 @@ public class OrderEdit extends AggregateRoot<OrderEdit> {
      * B2: tính lại price
      * B3: xác định xem có nên apply thuế không => add thuế
      * B4: xác định changeType, action => add vảo
+     * B5: chỉ xử lý case có productId => apply tax
      */
     public void addLineItem(AddedLineItem lineItem, TaxSetting taxSetting) {
         lineItem.setAggRoot(this);
@@ -159,27 +165,118 @@ public class OrderEdit extends AggregateRoot<OrderEdit> {
 
         this.adjustPrice(lineItem.getOriginalUnitPrice());
 
-        this.addTax(lineItem.getProductId(), taxSetting);
+        this.calculateTax(lineItem, taxSetting);
 
         var stagedChange = new OrderStagedChange(UUID.randomUUID(), type, action);
         stagedChange.setAggRoot(this);
         this.stagedChanges.add(stagedChange);
     }
 
-    private void addTax(Integer productId, TaxSetting taxSetting) {
-        if (shouldCalculateTax(productId, taxSetting)) {
+    private void calculateTax(AddedLineItem lineItem, TaxSetting taxSetting) {
+        if (CollectionUtils.isEmpty(taxSetting.getTaxes())) {
+            return;
+        }
 
+        var taxValueMap = taxSetting.getTaxes().stream()
+                .collect(Collectors.toMap(TaxSettingValue::getProductId,
+                        Function.identity()));
+        Integer productId = lineItem.getProductId();
+        var taxValue = taxValueMap.get(productId);
+        if (taxValue == null) return;
+
+        this.addTax(taxValue, lineItem, taxSetting.isTaxIncluded());
+    }
+
+    private void addTax(TaxSettingValue taxValue, AddedLineItem lineItem, boolean taxIncluded) {
+        var currency = getEditCurrency();
+        var taxLine = new AddedTaxLine(
+                UUID.randomUUID(),
+                taxValue.getTitle(),
+                taxValue.getRate(),
+                lineItem,
+                currency,
+                taxIncluded
+        );
+        taxLine.setAggRoot(this);
+        this.taxLines.add(taxLine);
+
+        this.adjustTaxPrice(taxLine.getPrice(), taxIncluded);
+    }
+
+    private void adjustTaxPrice(BigDecimal adjustmentPrice, boolean taxIncluded) {
+        if (!taxIncluded) {
+            totalPrice = totalPrice.add(adjustmentPrice);
+            totalOutStanding = totalOutStanding.add(adjustmentPrice);
         }
     }
 
-    private boolean shouldCalculateTax(Integer productId, TaxSetting taxSetting) {
-
-        return true;
+    private Currency getEditCurrency() {
+        if (this.currency != null) return this.currency;
+        this.currency = Currency.getInstance("VND");
+        return this.currency;
     }
+
 
     private void adjustPrice(BigDecimal adjustmentPrice) {
         this.subtotalPrice = this.subtotalPrice.add(adjustmentPrice);
         this.totalPrice = this.totalPrice.add(adjustmentPrice);
         this.totalOutStanding = this.totalOutStanding.add(adjustmentPrice);
+    }
+
+    /**
+     * TH1: increase addedLineItem =>
+     * - tăng quantity => tính lại price trong lineItem, trong orderEdit (nếu có discount)
+     * - add taxLine nếu có
+     * TH2: increase lineItem =>
+     */
+    public void increaseLineItemQuantity(OrderEditContextService.IncrementContext context, OrderEditRequest.Increment increment) {
+        var lineItemInfo = context.lineItemInfo();
+        var taxSetting = context.taxSetting();
+
+        this.subtotalLineItemQuantity = this.subtotalLineItemQuantity.add(BigDecimal.valueOf(increment.getDelta()));
+
+        // increase added line item
+        if (lineItemInfo.addedLineItem() != null) {
+            var addedLine = lineItemInfo.addedLineItem();
+
+            var adjustmentPrice = addedLine.adjustQuantity(increment.getDelta());
+
+            this.adjustPrice(adjustmentPrice);
+
+            var taxLine = this.taxLines.stream()
+                    .filter(tax -> Objects.equals(tax.getLineItemId(), increment.getLineItemId()))
+                    .findFirst()
+                    .orElse(null);
+            if (taxLine != null) {
+                var adjustmentTaxPrice = taxLine.adjustQuantity(
+                        addedLine.getEditableQuantity(),
+                        addedLine.getEditableSubtotal(),
+                        getEditCurrency(),
+                        taxSetting.isTaxIncluded());
+                adjustTaxPrice(adjustmentTaxPrice, taxSetting.isTaxIncluded());
+            }
+            return;
+        }
+
+        var lineItem = lineItemInfo.lineItem();
+        Preconditions.checkNotNull(lineItem);
+
+        if (CollectionUtils.isNotEmpty(lineItem.getDiscountAllocations())) {
+            throw new ConstrainViolationException(
+                    "line_item",
+                    "discounted_line_item cannot adjust quantity"
+            );
+        }
+
+        var adjustQuantity = BigDecimal.valueOf(increment.getDelta());
+        var adjustmentPrice = lineItem.getDiscountUnitPrice().multiply(adjustQuantity);
+
+        this.adjustPrice(adjustmentPrice);
+
+        this.removeStagedChangeFor(increment.getLineItemId());
+    }
+
+    private void removeStagedChangeFor(String lineItemId) {
+
     }
 }

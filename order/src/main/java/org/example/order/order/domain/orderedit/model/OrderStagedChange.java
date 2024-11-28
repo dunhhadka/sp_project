@@ -139,6 +139,25 @@ public class OrderStagedChange {
         public AddCustomItem() {
             super(ChangeType.add_custom_item);
         }
+
+        public AddCustomItem(
+                UUID lineItemId,
+                String title,
+                BigDecimal price,
+                BigDecimal quantity,
+                boolean taxable,
+                boolean requireShipping,
+                Integer locationId
+        ) {
+            super(ChangeType.add_custom_item);
+            this.lineItemId = lineItemId;
+            this.title = title;
+            this.price = price;
+            this.quantity = quantity;
+            this.taxable = taxable;
+            this.requireShipping = requireShipping;
+            this.locationId = locationId;
+        }
     }
 
     @Getter

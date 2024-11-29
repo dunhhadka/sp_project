@@ -3,6 +3,7 @@ package org.example.order.order.application.service.orderedit;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import org.apache.commons.collections4.CollectionUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.example.order.order.application.exception.ConstrainViolationException;
 import org.example.order.order.domain.order.model.*;
 import org.example.order.order.domain.order.persistence.OrderRepository;
@@ -223,5 +224,11 @@ public class OrderEditWriteService {
 
         orderEditRepository.save(orderEdit);
         return increment.getLineItemId();
+    }
+
+    @Transactional
+    public String setItemQuantity(OrderEditId orderEditId, OrderEditRequest.SetItemQuantity request) {
+        var context = orderEditContextService.createSetItemQuantityContext(orderEditId, request);
+        return StringUtils.EMPTY;
     }
 }

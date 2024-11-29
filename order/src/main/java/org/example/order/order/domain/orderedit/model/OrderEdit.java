@@ -138,7 +138,7 @@ public class OrderEdit extends AggregateRoot<OrderEdit> {
         lineItem.setAggRoot(this);
 
         this.lineItems.add(lineItem);
-        this.subtotalLineItemQuantity = this.subtotalLineItemQuantity.add(lineItem.getEditableSubtotal());
+        this.subtotalLineItemQuantity = this.subtotalLineItemQuantity.add(lineItem.getEditableQuantity());
 
         OrderStagedChange.ChangeType type;
         OrderStagedChange.BaseAction action;

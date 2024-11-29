@@ -5,10 +5,7 @@ import lombok.Getter;
 import lombok.Setter;
 
 import javax.validation.Valid;
-import javax.validation.constraints.Min;
-import javax.validation.constraints.NotEmpty;
-import javax.validation.constraints.NotNull;
-import javax.validation.constraints.Positive;
+import javax.validation.constraints.*;
 import java.math.BigDecimal;
 import java.util.List;
 
@@ -18,6 +15,7 @@ public class OrderEditRequest {
 
     @Getter
     @Setter
+    @Builder
     public static class AddVariants {
         private @NotEmpty List<@Valid AddVariant> addVariants;
     }
@@ -46,5 +44,14 @@ public class OrderEditRequest {
         private @NotNull String lineItemId;
         private @NotNull int delta;
         private @Positive Integer locationId;
+    }
+
+    @Getter
+    @Setter
+    public static class SetItemQuantity {
+        private @NotBlank @Size(max = 35) String lineItemId;
+        private @Min(0) int quantity;
+        private @Min(0) Integer locationId;
+        private boolean restock;
     }
 }

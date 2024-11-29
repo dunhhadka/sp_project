@@ -1,5 +1,6 @@
 package org.example.order.order.infrastructure.data.dto;
 
+import lombok.Builder;
 import lombok.Getter;
 import lombok.Setter;
 import org.example.order.order.domain.order.model.VariantInfo;
@@ -8,6 +9,7 @@ import java.math.BigDecimal;
 
 @Getter
 @Setter
+@Builder
 public class VariantDto {
     private int id;
     private int productId;

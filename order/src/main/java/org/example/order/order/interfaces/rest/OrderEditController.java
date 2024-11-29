@@ -47,4 +47,15 @@ public class OrderEditController {
         var lineItemId = orderEditWriteService.increaseLineItem(orderEditId, increment);
         return orderEditReadService.getBeginEdit(orderEditId);
     }
+
+    @PostMapping("/{id}/set_item_quantity")
+    public OrderEditResponse setItemQuantity(
+            @StoreId Integer storeId,
+            @PathVariable int id,
+            @RequestBody @Valid OrderEditRequest.SetItemQuantity request
+    ) {
+        var orderEditId = new OrderEditId(storeId, id);
+        var lineItemId = orderEditWriteService.setItemQuantity(orderEditId, request);
+        return orderEditReadService.getBeginEdit(orderEditId);
+    }
 }

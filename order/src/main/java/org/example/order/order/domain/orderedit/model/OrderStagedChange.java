@@ -43,6 +43,15 @@ public class OrderStagedChange {
         this.action = action;
     }
 
+    public void updateEvent(BaseAction newEvent) {
+        this.action = newEvent;
+    }
+
+    public void update(ChangeType type, BaseAction action) {
+        this.type = type;
+        this.action = action;
+    }
+
     public interface QuantityAdjustmentAction {
         int getLineItemId();
 
@@ -76,7 +85,6 @@ public class OrderStagedChange {
         @jakarta.persistence.Converter
         public static class Converter implements AttributeConverter<BaseAction, String> {
 
-
             @Override
             @SneakyThrows
             public String convertToDatabaseColumn(BaseAction baseAction) {
@@ -93,7 +101,7 @@ public class OrderStagedChange {
 
     @Getter
     @Setter
-    @Builder
+    @Builder(toBuilder = true)
     public static class AddVariant extends BaseAction implements AddLineItemAction {
         @NotNull
         private Integer variantId;
@@ -119,7 +127,7 @@ public class OrderStagedChange {
 
     @Getter
     @Setter
-    @Builder
+    @Builder(toBuilder = true)
     public static class AddCustomItem extends BaseAction implements AddLineItemAction {
         @NotNull
         private UUID lineItemId;
@@ -162,19 +170,32 @@ public class OrderStagedChange {
 
     @Getter
     @Setter
+    @Builder
     public static class IncrementItem extends BaseAction implements QuantityAdjustmentAction {
         @Positive
         private int lineItemId;
         private int delta;
         private Integer locationId;
 
+        public IncrementItem(int lineItemId, int delta, Integer locationId) {
+            this();
+            this.lineItemId = lineItemId;
+            this.delta = delta;
+            this.locationId = locationId;
+        }
+
         public IncrementItem() {
             super(ChangeType.increment_item);
+        }
+
+        public void update(int delta) {
+            this.delta = delta;
         }
     }
 
     @Getter
     @Setter
+    @Builder
     public static class DecrementItem extends BaseAction implements QuantityAdjustmentAction {
         @Positive
         private int lineItemId;
@@ -182,8 +203,20 @@ public class OrderStagedChange {
         private Integer locationId;
         private boolean restock;
 
+        public DecrementItem(int lineItemId, int delta, Integer locationId, boolean restock) {
+            this();
+            this.lineItemId = lineItemId;
+            this.delta = delta;
+            this.locationId = locationId;
+            this.restock = restock;
+        }
+
         public DecrementItem() {
             super(ChangeType.decrement_item);
+        }
+
+        public void update(int delta) {
+            this.delta = delta;
         }
     }
 

@@ -32,4 +32,9 @@ public class AddedDiscountAllocation {
 
     @NotNull
     private Instant updatedAt;
+
+    public void adjustAmount(BigDecimal discountAmount) {
+        this.allocatedAmount = discountAmount;
+        this.updatedAt = Instant.now();
+    }
 }

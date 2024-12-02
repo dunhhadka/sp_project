@@ -7,6 +7,7 @@ import org.example.order.order.application.service.orderedit.OrderEditWriteServi
 import org.example.order.order.application.utils.TaxHelper;
 import org.example.order.order.application.utils.TaxSetting;
 import org.example.order.order.domain.order.model.OrderId;
+import org.example.order.order.domain.orderedit.model.OrderStagedChange;
 import org.example.order.order.domain.orderedit.persistence.OrderEditRepository;
 import org.example.order.order.infrastructure.data.dao.ProductDao;
 import org.example.order.order.infrastructure.data.dto.Location;
@@ -77,6 +78,27 @@ public class OrderEditWriteServiceTest extends OrderBaseServiceTest {
         Assertions.assertEquals(2, orderEdit.getLineItems().size());
         Assertions.assertEquals(BigDecimal.valueOf(30 + 2 + 3), orderEdit.getSubtotalLineItemQuantity().stripTrailingZeros());
     }
+
+    @Test
+    public void update_quantity_exist_line_item() {
+        var orderEditId = orderEditWriteService.beginEdit(Fixtures.orderId);
+
+        var setQuantityRequest = OrderEditRequest.SetItemQuantity.builder()
+                .quantity(20)
+                .lineItemId("1")
+                .build();
+
+        orderEditWriteService.setItemQuantity(orderEditId, setQuantityRequest);
+
+        var orderEdit = orderEditRepository.findById(orderEditId);
+
+        Assertions.assertEquals(BigDecimal.valueOf(40).toPlainString(), orderEdit.getSubtotalLineItemQuantity().stripTrailingZeros().toPlainString());
+        Assertions.assertEquals(1, orderEdit.getStagedChanges().size());
+        var change = orderEdit.getStagedChanges().get(0);
+        Assertions.assertTrue(change.getAction() instanceof OrderStagedChange.IncrementItem);
+        Assertions.assertEquals(10, ((OrderStagedChange.IncrementItem) change.getAction()).getDelta());
+    }
+
 
     private OrderEditRequest.AddVariants createAddVariantRequest() {
         OrderEditRequest.AddVariant addVariant1 = OrderEditRequest.AddVariant.builder()

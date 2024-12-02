@@ -48,6 +48,7 @@ public class OrderEditRequest {
 
     @Getter
     @Setter
+    @Builder
     public static class SetItemQuantity {
         private @NotBlank @Size(max = 35) String lineItemId;
         private @Min(0) int quantity;

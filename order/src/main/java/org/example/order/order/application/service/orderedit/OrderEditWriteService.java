@@ -229,6 +229,35 @@ public class OrderEditWriteService {
     @Transactional
     public String setItemQuantity(OrderEditId orderEditId, OrderEditRequest.SetItemQuantity request) {
         var context = orderEditContextService.createSetItemQuantityContext(orderEditId, request);
+        OrderEdit editing = context.orderEdit();
+
+        if (context instanceof OrderEditContextService.AddedLineItemRemover remover) {
+            editing.removeLineItem(remover.lineItem().getId(), remover.taxSetting());
+        } else if (context instanceof OrderEditContextService.ChangeAddedLineItemQuantity changeQuantity) {
+            var adjustmentLineItemId = changeQuantity.lineItem().getId();
+
+            editing.adjustAddedLineQuantity(adjustmentLineItemId, request, changeQuantity.taxSetting());
+        } else if (context instanceof OrderEditContextService.ExistingLineItem existingLineItem) {
+            LineItem lineItem = existingLineItem.lineItem();
+
+            // cannot adjust quantity => TH1: LineItem đã fulfilled , TH2: LineItem có Discount
+            boolean isFulfilled = lineItem.getFulfillableQuantity() == 0;
+            if (isFulfilled) {
+                throw new ConstrainViolationException("line_item", "line item");
+            }
+
+            boolean hasDiscount = CollectionUtils.isNotEmpty(lineItem.getDiscountAllocations());
+            if (hasDiscount) {
+                throw new ConstrainViolationException(
+                        "line_item",
+                        "Line item has discount cannot edit");
+            }
+
+            editing.recordQuantityAdjustment(lineItem, existingLineItem.taxSetting(), request);
+
+        }
+
+        orderEditRepository.save(editing);
         return StringUtils.EMPTY;
     }
 }

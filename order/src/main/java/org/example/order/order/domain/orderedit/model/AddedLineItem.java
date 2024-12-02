@@ -125,4 +125,21 @@ public class AddedLineItem {
     private void calculatePrice() {
         this.editableSubtotal = this.discountedUnitPrice.multiply(this.editableQuantity);
     }
+
+    public BigDecimal adjustQuantity(BigDecimal editableQuantity) {
+        BigDecimal priceBeforeChange = this.editableSubtotal;
+
+        this.editableQuantity = editableQuantity;
+        this.calculatePrice();
+
+        this.updatedAt = Instant.now();
+
+        return editableSubtotal.subtract(priceBeforeChange);
+    }
+
+    public BigDecimal getTotalDiscount() {
+        BigDecimal totalDiscountedPrice = this.discountedUnitPrice
+                .multiply(this.editableQuantity);
+        return editableSubtotal.subtract(totalDiscountedPrice);
+    }
 }

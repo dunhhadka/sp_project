@@ -51,44 +51,156 @@ public class OrderEditContextService {
      * - nếu quantityRequest == 0 => remove LineItem quantity
      */
     public SetQuantityContext createSetItemQuantityContext(OrderEditId orderEditId, OrderEditRequest.SetItemQuantity request) {
-        return SetQuantityContextFactory.create(orderEditId, request);
+        return createSetQuantityContext(orderEditId, request);
     }
 
-    private static final class SetQuantityContextFactory {
-        public static SetQuantityContext create(OrderEditId orderEditId, OrderEditRequest.SetItemQuantity request) {
-            Pair<Integer, UUID> lineItemPair = OrderEditUtils.resolveLineItemId(request.getLineItemId());
+    public SetQuantityContext createSetQuantityContext(OrderEditId orderEditId, OrderEditRequest.SetItemQuantity request) {
+        Pair<Integer, UUID> lineItemPair = OrderEditUtils.resolveLineItemId(request.getLineItemId());
 
-            if (lineItemPair.getLeft() != null) {
-                return createExistingContext(lineItemPair.getLeft(), orderEditId, request);
-            } else if (lineItemPair.getRight() != null) {
-                return createAddedLineItemContext(lineItemPair.getRight(), orderEditId, request);
+        if (lineItemPair.getLeft() != null) {
+            return createExistingContext(lineItemPair.getLeft(), orderEditId, request);
+        } else if (lineItemPair.getRight() != null) {
+            return createAddedLineItemContext(lineItemPair.getRight(), orderEditId, request);
+        }
+
+        throw new ConstrainViolationException("line_item_id", "can not resole line_item_id from request");
+    }
+
+    private OrderEditAddedLineItem createAddedLineItemContext(UUID addedLineItemId, OrderEditId orderEditId, OrderEditRequest.SetItemQuantity request) {
+        OrderEdit orderEdit = fetchOrderEdit(orderEditId);
+        AddedLineItem lineItem = orderEdit.getLineItems().stream()
+                .filter(line -> Objects.equals(line.getId(), addedLineItemId))
+                .findFirst()
+                .orElseThrow(() -> new ConstrainViolationException(
+                        "line_item",
+                        "Line item not found with %s".formatted(addedLineItemId)));
+        if (request.getQuantity() == 0) {
+            return new AddedLineItemRemover(orderEdit, lineItem, request);
+        }
+        return new ChangeAddedLineItemQuantity(orderEdit, lineItem, request);
+    }
+
+    public class ChangeAddedLineItemQuantity extends AbstractContext<OrderEditRequest.SetItemQuantity>
+            implements OrderEditAddedLineItem, NeedTax {
+
+        protected final AddedLineItem lineItem;
+        protected final TaxSetting taxSetting;
+
+        protected ChangeAddedLineItemQuantity(OrderEdit orderEdit, AddedLineItem lineItem, OrderEditRequest.SetItemQuantity request) {
+            super(orderEdit, request);
+
+            this.lineItem = lineItem;
+            if (!lineItem.isTaxable()) {
+                this.taxSetting = TaxSetting.defaultTax();
+                return;
             }
 
-            throw new ConstrainViolationException("line_item_id", "can not resole line_item_id from request");
+            Set<Integer> productIds = lineItem.getProductId() != null
+                    ? new HashSet<>(lineItem.getProductId())
+                    : new HashSet<>();
+            this.taxSetting = needTaxes(productIds);
         }
 
-        private static ExistingLineItem createAddedLineItemContext(UUID lineItemIdUuid, OrderEditId orderEditId, OrderEditRequest.SetItemQuantity request) {
-            var orderEdit =
-            return null;
+        @Override
+        public TaxSetting taxSetting() {
+            return this.taxSetting;
         }
 
-        private static OrderEditAddedLineItem createExistingContext(Integer addedLineItemId, OrderEditId orderEditId, OrderEditRequest.SetItemQuantity request) {
-            return null;
+        @Override
+        public AddedLineItem lineItem() {
+            return lineItem;
+        }
+    }
+
+    public class AddedLineItemRemover extends ChangeAddedLineItemQuantity {
+
+        protected AddedLineItemRemover(OrderEdit orderEdit, AddedLineItem lineItem, OrderEditRequest.SetItemQuantity request) {
+            super(orderEdit, lineItem, request);
+        }
+    }
+
+    private ExistingLineItem createExistingContext(Integer lineItemId, OrderEditId orderEditId, OrderEditRequest.SetItemQuantity request) {
+        OrderEdit orderEdit = fetchOrderEdit(orderEditId);
+        Order order = fetchOrder(orderEditId.getStoreId(), orderEdit.getOrderId());
+        LineItem lineItem = order.getLineItems().stream()
+                .filter(line -> Objects.equals(line.getId(), lineItemId))
+                .findFirst()
+                .orElseThrow(() -> new ConstrainViolationException(
+                        "line_item",
+                        "Line item not found with %s".formatted(lineItemId)));
+        if (request.getQuantity() > lineItem.getFulfillableQuantity()) {
+            return new IncrementLineItemQuantity(orderEdit, order, request, lineItem);
+        } else if (request.getQuantity() < lineItem.getFulfillableQuantity()) {
+            return new DecrementLineItemQuantity(orderEdit, order, request, lineItem);
+        }
+        return new ResetLineItemQuantity(orderEdit, order, request, lineItem);
+    }
+
+    public class ExistingLineItemImpl extends AbstractContext<OrderEditRequest.SetItemQuantity>
+            implements ExistingLineItem {
+
+        protected final LineItem lineItem;
+        protected final TaxSetting taxSetting;
+
+        protected ExistingLineItemImpl(OrderEdit orderEdit, Order order, OrderEditRequest.SetItemQuantity request, LineItem lineItem) {
+            super(orderEdit, order, request);
+
+            this.lineItem = lineItem;
+
+            if (!lineItem.isTaxable()) {
+                taxSetting = TaxSetting.defaultTax();
+                return;
+            }
+
+            Set<Integer> productIds = lineItem.getVariantInfo().getProductId() != null
+                    ? new HashSet<>(lineItem.getVariantInfo().getProductId())
+                    : new HashSet<>();
+            this.taxSetting = needTaxes(productIds);
+        }
+
+        @Override
+        public LineItem lineItem() {
+            return this.lineItem;
+        }
+
+        @Override
+        public TaxSetting taxSetting() {
+            return taxSetting;
+        }
+    }
+
+    public class ResetLineItemQuantity extends ExistingLineItemImpl {
+
+        protected ResetLineItemQuantity(OrderEdit orderEdit, Order order, OrderEditRequest.SetItemQuantity request, LineItem lineItem) {
+            super(orderEdit, order, request, lineItem);
+        }
+    }
+
+    public class DecrementLineItemQuantity extends ExistingLineItemImpl {
+
+        protected DecrementLineItemQuantity(OrderEdit orderEdit, Order order, OrderEditRequest.SetItemQuantity request, LineItem lineItem) {
+            super(orderEdit, order, request, lineItem);
+        }
+    }
+
+    public class IncrementLineItemQuantity extends ExistingLineItemImpl {
+        protected IncrementLineItemQuantity(OrderEdit orderEdit, Order order, OrderEditRequest.SetItemQuantity request, LineItem lineItem) {
+            super(orderEdit, order, request, lineItem);
         }
     }
 
 
-    private interface OrderEditAddedLineItem extends SetQuantityContext {
-
+    public interface OrderEditAddedLineItem extends SetQuantityContext {
+        AddedLineItem lineItem();
     }
 
 
-    private interface ExistingLineItem extends SetQuantityContext {
-
+    public interface ExistingLineItem extends SetQuantityContext, NeedTax {
+        LineItem lineItem();
     }
 
 
-    public interface SetQuantityContext {
+    public interface SetQuantityContext extends EditContext {
 
     }
 
@@ -183,8 +295,19 @@ public class OrderEditContextService {
             return this.orderEdit;
         }
 
+        protected AbstractContext(OrderEdit orderEdit, T request) {
+            this.orderEdit = orderEdit;
+            this.request = request;
+        }
+
         protected AbstractContext(OrderEditId orderEditId, T request) {
             this.orderEdit = fetchOrderEdit(orderEditId);
+            this.request = request;
+        }
+
+        protected AbstractContext(OrderEdit orderEdit, Order order, T request) {
+            this.orderEdit = orderEdit;
+            this.order = order;
             this.request = request;
         }
 
@@ -194,7 +317,7 @@ public class OrderEditContextService {
 
         protected Order order() {
             if (order == null) {
-                fetchOrder(storeId(), this.orderEdit.getOrderId());
+                this.order = fetchOrder(storeId(), this.orderEdit.getOrderId());
             }
             return order;
         }
@@ -283,7 +406,7 @@ public class OrderEditContextService {
         protected TaxSetting needTaxes(Set<Integer> productIds) {
             Preconditions.checkNotNull(orderEdit, "order edit must have value before fetched");
 
-            if (order == null) fetchOrder(storeId(), this.orderEdit.getOrderId());
+            if (order == null) this.order = fetchOrder(storeId(), this.orderEdit.getOrderId());
 
             var countryCode = OrderEditUtils.getCountryCode(order);
             productIds.add(0);

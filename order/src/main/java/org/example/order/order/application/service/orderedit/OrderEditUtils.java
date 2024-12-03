@@ -24,10 +24,7 @@ import java.util.stream.Stream;
 @NoArgsConstructor(access = AccessLevel.PRIVATE)
 public final class OrderEditUtils {
 
-    public static GroupedStagedChange groupChanges(List<OrderStagedChangeDto> stagedChanges) {
-        var orderStagedChanges = stagedChanges.stream()
-                .map(OrderEditUtils::convert)
-                .toList();
+    public static GroupedStagedChange groupChanges(List<OrderStagedChange> orderStagedChanges) {
 
         List<OrderStagedChange.AddVariant> addVariants = new ArrayList<>();
         List<OrderStagedChange.AddCustomItem> addCustomItems = new ArrayList<>();

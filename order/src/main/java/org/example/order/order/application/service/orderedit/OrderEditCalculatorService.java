@@ -155,7 +155,7 @@ public class OrderEditCalculatorService {
 
     private EditContext buildEditContext(EntityGraph entityGraph) {
         List<OrderStagedChangeDto> stagedChanges = entityGraph.orderEdit.changes();
-        var changes = OrderEditUtils.groupChanges(stagedChanges);
+        var changes = OrderEditUtils.groupChanges(stagedChanges.stream().map(OrderEditUtils::convert).toList());
 
         var addLineItemMap = changes.getAddItemActions()
                 .collect(Collectors.toMap(

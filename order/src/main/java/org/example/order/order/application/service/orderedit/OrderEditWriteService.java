@@ -32,6 +32,7 @@ public class OrderEditWriteService {
     private final OrderRepository orderRepository;
     private final OrderEditRepository orderEditRepository;
     private final OrderEditContextService orderEditContextService;
+    private final OrderCommitService orderCommitService;
 
     /**
      * cartDiscountAmount = Giảm giá trong shipping và giảm giá đơn hàng trong line_item
@@ -259,5 +260,13 @@ public class OrderEditWriteService {
 
         orderEditRepository.save(editing);
         return StringUtils.EMPTY;
+    }
+
+    @Transactional
+    public void commit(OrderEditId orderEditId) {
+        var orderEdit = orderEditRepository.findById(orderEditId);
+        var order = orderRepository.findById(new OrderId(orderEditId.getStoreId(), orderEdit.getOrderId()));
+
+        orderCommitService.commit(order, orderEdit);
     }
 }

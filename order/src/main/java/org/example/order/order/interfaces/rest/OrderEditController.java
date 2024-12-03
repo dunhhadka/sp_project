@@ -1,6 +1,7 @@
 package org.example.order.order.interfaces.rest;
 
 import lombok.RequiredArgsConstructor;
+import org.aspectj.weaver.ast.Or;
 import org.example.order.order.application.model.orderedit.OrderEditResponse;
 import org.example.order.order.application.service.orderedit.OrderEditReadService;
 import org.example.order.order.application.service.orderedit.OrderEditRequest;
@@ -56,6 +57,15 @@ public class OrderEditController {
     ) {
         var orderEditId = new OrderEditId(storeId, id);
         var lineItemId = orderEditWriteService.setItemQuantity(orderEditId, request);
+        return orderEditReadService.getBeginEdit(orderEditId);
+    }
+
+    @PostMapping("/{id}/commit")
+    public OrderEditResponse commit(@StoreId Integer storeId,
+                                    @PathVariable int id
+    ) {
+        var orderEditId = new OrderEditId(storeId, id);
+        orderEditWriteService.commit(orderEditId);
         return orderEditReadService.getBeginEdit(orderEditId);
     }
 }

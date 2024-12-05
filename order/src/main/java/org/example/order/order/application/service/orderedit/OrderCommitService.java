@@ -2,15 +2,19 @@ package org.example.order.order.application.service.orderedit;
 
 import lombok.RequiredArgsConstructor;
 import org.example.order.SapoClient;
+import org.example.order.order.application.exception.ConstrainViolationException;
 import org.example.order.order.application.model.order.request.LocationFilter;
+import org.example.order.order.domain.order.model.LineItem;
 import org.example.order.order.domain.order.model.Order;
 import org.example.order.order.domain.orderedit.model.OrderEdit;
 import org.example.order.order.domain.orderedit.model.OrderStagedChange;
 import org.example.order.order.infrastructure.data.dto.Location;
 import org.springframework.stereotype.Service;
-import org.springframework.util.CollectionUtils;
 
 import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -18,14 +22,18 @@ public class OrderCommitService {
 
     private final SapoClient sapoClient;
 
+    private final AddService addService;
+
     public void commit(Order order, OrderEdit orderEdit) {
         OrderEditUtils.GroupedStagedChange changes = OrderEditUtils.groupChanges(orderEdit.getStagedChanges());
 
         // validate location
-        List<Location> locations = getLocations(changes.getAddItemActions().toList());
+        Map<Long, Location> locations = getLocations(changes.getAddItemActions().toList());
+
+        List<LineItem> newLineItems = addService.addLineItems(order, orderEdit, changes);
     }
 
-    private List<Location> getLocations(List<OrderStagedChange.AddLineItemAction> addActions) {
+    private Map<Long, Location> getLocations(List<OrderStagedChange.AddLineItemAction> addActions) {
         List<Long> locationIds = addActions.stream()
                 .map(OrderStagedChange.AddLineItemAction::getLocationId)
                 .map(Long::valueOf)
@@ -37,8 +45,19 @@ public class OrderCommitService {
         if (includeDefault) {
             filter.defaultLocation(true);
         }
-        List<Location> locations = sapoClient.locationList(filter.build());
+        Map<Long, Location> locations = sapoClient.locationList(filter.build()).stream()
+                .collect(Collectors.toMap(
+                        Location::getId,
+                        Function.identity()));
 
-        
+        String locationIdNotFound = locationIds.stream()
+                .filter(id -> !locations.containsKey(id))
+                .map(String::valueOf)
+                .collect(Collectors.joining(", "));
+        if (!locationIdNotFound.isEmpty()) {
+            throw new ConstrainViolationException("location_ids", locationIdNotFound);
+        }
+
+        return locations;
     }
 }

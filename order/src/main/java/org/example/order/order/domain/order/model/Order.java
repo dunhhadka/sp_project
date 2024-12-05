@@ -31,7 +31,7 @@ import java.util.stream.Collectors;
 @Getter
 @Table(name = "orders")
 @NoArgsConstructor
-public class Order extends AggregateRoot<Order> {
+public class Order extends AggregateRoot<Order> implements OrderEditOperation {
 
     public static final Locale DEFAULT_LOCAL = new Locale.Builder().setLanguage("vi").setRegion("VN").build();
     public static final Currency DEFAUT_CURRENCY = Currency.getInstance(DEFAULT_LOCAL);
@@ -633,6 +633,11 @@ public class Order extends AggregateRoot<Order> {
     public BillingAddress getBillingAddress() {
         if (CollectionUtils.isEmpty(this.billingAddresses)) return null;
         return this.billingAddresses.get(0);
+    }
+
+    @Override
+    public Order order() {
+        return this;
     }
 
     @Getter

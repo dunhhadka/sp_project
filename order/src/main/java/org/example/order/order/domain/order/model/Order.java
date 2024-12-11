@@ -4,6 +4,7 @@ package org.example.order.order.domain.order.model;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonUnwrapped;
 import jakarta.persistence.*;
+import kotlin.Pair;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -638,6 +639,58 @@ public class Order extends AggregateRoot<Order> implements OrderEditOperation {
     @Override
     public Order order() {
         return this;
+    }
+
+    public List<Pair<LineItem, Integer>> increaseQuantity(Map<Integer, Integer> adjustQuantity) {
+        if (adjustQuantity == null || adjustQuantity.isEmpty()) return List.of();
+
+        var result = new ArrayList<Pair<LineItem, Integer>>();
+        adjustQuantity.forEach((lineItemId, delta) -> {
+            LineItem lineItem = this.getLineItems().stream()
+                    .filter(line -> Objects.equals(line.getId(), lineItemId))
+                    .findFirst()
+                    .orElse(null);
+            if (lineItem == null)
+                return;
+
+            //  nếu lineItem đã fulfilled or có discount thì không được điều chỉnh
+            boolean invalid = lineItem.getFulfillableQuantity() == 0
+                    || !CollectionUtils.isEmpty(lineItem.getDiscountAllocations());
+            if (invalid) {
+                throw new ConstrainViolationException("", "");
+            }
+
+            lineItem.increaseQuantity(delta);
+            result.add(new Pair<>(lineItem, delta));
+        });
+
+        if (!result.isEmpty()) {
+            BigDecimal increaseAmount = result.stream()
+                    .map(line -> line.getFirst().getDiscountedTotal())
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+            this.adjustTotalPrice(increaseAmount, increaseAmount);
+        }
+
+        return result;
+    }
+
+    private void adjustTotalPrice(BigDecimal increaseAmount, BigDecimal lineItemAmount) {
+        var moneyInfoBuilder = this.moneyInfo.toBuilder()
+                .totalLineItemPrice(this.moneyInfo.getTotalLineItemPrice().add(lineItemAmount))
+                .currentTotalPrice(this.moneyInfo.getCurrentTotalPrice().add(increaseAmount))
+                .totalPrice(this.moneyInfo.getTotalPrice().add(increaseAmount))
+                .netPayment(this.moneyInfo.getNetPayment().add(increaseAmount))
+                .originalTotalPrice(this.moneyInfo.getOriginalTotalPrice().add(lineItemAmount));
+
+        BigDecimal discountedAmount = lineItemAmount.subtract(increaseAmount);
+        if (discountedAmount.signum() > 0) {
+            moneyInfoBuilder
+                    .cartDiscountAmount(this.moneyInfo.getCartDiscountAmount().add(discountedAmount))
+                    .currentTotalDiscount(this.moneyInfo.getCurrentTotalDiscount().add(discountedAmount));
+        }
+
+        this.changeMoneyInfo(moneyInfoBuilder.build());
     }
 
     @Getter

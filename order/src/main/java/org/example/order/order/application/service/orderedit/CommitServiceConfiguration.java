@@ -4,6 +4,6 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 
 @Configuration
-@Import({AddService.class})
+@Import({AddService.class, ChangeQuantityService.class, TaxService.class})
 public class CommitServiceConfiguration {
 }

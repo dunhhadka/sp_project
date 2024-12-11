@@ -1,5 +1,6 @@
 package org.example.order.order.application.service.orderedit;
 
+import kotlin.Pair;
 import lombok.RequiredArgsConstructor;
 import org.example.order.SapoClient;
 import org.example.order.order.application.exception.ConstrainViolationException;
@@ -23,6 +24,8 @@ public class OrderCommitService {
     private final SapoClient sapoClient;
 
     private final AddService addService;
+    private final ChangeQuantityService changeQuantityService;
+    private final TaxService taxService;
 
     public void commit(Order order, OrderEdit orderEdit) {
         OrderEditUtils.GroupedStagedChange changes = OrderEditUtils.groupChanges(orderEdit.getStagedChanges());
@@ -31,6 +34,18 @@ public class OrderCommitService {
         Map<Long, Location> locations = getLocations(changes.getAddItemActions().toList());
 
         List<LineItem> newLineItems = addService.addLineItems(order, orderEdit, changes);
+
+        List<Pair<LineItem, Integer>> increaseLineItems = changeQuantityService.increaseQuantity(order, changes.incrementItems());
+
+        List<ChangedLineItem> changedLineItems = increaseLineItems.stream()
+                .map(increment -> new ChangedLineItem(increment.getFirst(), increment.getSecond()))
+                .toList();
+        taxService.addTaxForLineItems(order, newLineItems, changedLineItems);
+
+
+    }
+
+    public record ChangedLineItem(LineItem lineItem, int delta) {
     }
 
     private Map<Long, Location> getLocations(List<OrderStagedChange.AddLineItemAction> addActions) {

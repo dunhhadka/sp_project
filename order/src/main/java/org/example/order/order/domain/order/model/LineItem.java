@@ -257,6 +257,21 @@ public class LineItem {
 //        this.quantity => là số lượng gốc khi tạo đơn hàng
     }
 
+    public void increaseQuantity(Integer delta) {
+        this.quantity += delta;
+        this.currentQuantity += delta;
+        this.fulfillableQuantity += delta;
+
+        this.calculatePrice();
+    }
+
+    private void calculatePrice() {
+        BigDecimal quantityDecimal = BigDecimal.valueOf(this.quantity);
+
+        this.originalTotal = quantityDecimal.multiply(price);
+        this.discountedTotal = quantityDecimal.multiply(discountUnitPrice);
+    }
+
     public enum FulfillmentStatus {
         partial,
         fulfilled,

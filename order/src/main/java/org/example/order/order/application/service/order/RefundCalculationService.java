@@ -4,8 +4,10 @@ import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.lang3.BooleanUtils;
+import org.example.order.SapoClient;
 import org.example.order.order.application.exception.ConstrainViolationException;
 import org.example.order.order.application.exception.UserError;
+import org.example.order.order.application.model.order.request.LocationFilter;
 import org.example.order.order.application.model.order.request.RefundRequest;
 import org.example.order.order.application.model.order.response.RefundCalculateResponse;
 import org.example.order.order.application.utils.NumberUtils;
@@ -15,7 +17,12 @@ import org.example.order.order.domain.order.model.OrderId;
 import org.example.order.order.domain.order.model.TaxLine;
 import org.example.order.order.domain.refund.model.OrderAdjustment;
 import org.example.order.order.domain.refund.model.RefundLineItem;
+import org.example.order.order.infrastructure.data.dao.FulfillmentOrderDao;
+import org.example.order.order.infrastructure.data.dao.FulfillmentOrderLineItemDao;
 import org.example.order.order.infrastructure.data.dao.ProductDao;
+import org.example.order.order.infrastructure.data.dto.FulfillmentOrderDto;
+import org.example.order.order.infrastructure.data.dto.FulfillmentOrderLineItemDto;
+import org.example.order.order.infrastructure.data.dto.Location;
 import org.example.order.order.infrastructure.data.dto.VariantDto;
 import org.springframework.stereotype.Service;
 
@@ -25,12 +32,17 @@ import java.util.*;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 @Service
 @RequiredArgsConstructor
 public class RefundCalculationService {
 
+    private final SapoClient sapoClient;
+
     private final ProductDao productDao;
+    private final FulfillmentOrderDao fulfillmentOrderDao;
+    private final FulfillmentOrderLineItemDao fulfillmentOrderLineItemDao;
 
     /**
      *
@@ -78,7 +90,103 @@ public class RefundCalculationService {
         // validate item
         validateRefundItems(refundRequest.getRefundLineItems(), refundableItems);
 
+        // validate location
+        validateLocation(refundRequest.getRefundLineItems(), order);
+
         return new RefundResult(List.of(), refundableItems);
+    }
+
+    private void validateLocation(List<RefundRequest.LineItem> refundLineItems, Order order) {
+        var fulfillmentInfos = getFulfillmentInfo(order.getId()).stream()
+                .sorted(Comparator.comparingLong(record -> record.fulfillmentOrder.getId()))
+                .toList();
+        var fulfillLocationIds = fulfillmentInfos.stream()
+                .map(record -> record.fulfillmentOrder.getAssignedLocationId())
+                .distinct()
+                .toList();
+        var locationIdsInput = refundLineItems.stream()
+                .map(RefundRequest.LineItem::getLocationId)
+                .distinct()
+                .toList();
+
+        var filterLocationIds = Stream.concat(fulfillLocationIds.stream(), locationIdsInput.stream()).toList();
+        if (CollectionUtils.isEmpty(filterLocationIds)) {
+            return;
+        }
+        var locationFilter = LocationFilter.builder().defaultLocation(true).locationIds(filterLocationIds).build();
+        var locations = sapoClient.locationList(locationFilter).stream()
+                .collect(Collectors.toMap(
+                        Location::getId,
+                        Function.identity()));
+        if (!locationIdsInput.isEmpty()) {
+            boolean notExist = locationIdsInput.stream()
+                    .anyMatch(id -> !locations.containsKey(id));
+            if (notExist) {
+                throw new ConstrainViolationException(UserError.builder()
+                        .message("location not found")
+                        .build());
+            }
+        }
+
+        for (var item : refundLineItems) {
+            Long defaultLocationId;
+            if (item.getLocationId() == null) {
+                final int lineItemId = item.getLineItemId();
+                defaultLocationId = fulfillmentInfos.stream()
+                        .filter(record -> record.lineItems.stream().anyMatch(line -> Objects.equals((int) line.getLineItemId(), lineItemId)))
+                        .map(record -> record.fulfillmentOrder.getAssignedLocationId())
+                        .findFirst()
+                        .orElse(null);
+            } else {
+                defaultLocationId = item.getLocationId();
+            }
+
+            var restockLocation = getRestockLocation(locations, defaultLocationId);
+            if (restockLocation == null) {
+                throw new ConstrainViolationException(UserError.builder()
+                        .message("require restock location for refund")
+                        .build());
+            }
+
+            item.setLocationId(restockLocation.getId());
+        }
+    }
+
+    private Location getRestockLocation(Map<Long, Location> locations, Long locationId) {
+        if (locationId != null) {
+            var location = locations.get(locationId);
+            if (location != null) {
+                return location;
+            }
+        }
+        return locations.values().stream()
+                .filter(Location::isDefaultLocation)
+                .findFirst()
+                .orElse(locations.values().stream().toList().get(0));
+    }
+
+    private List<FFORecord> getFulfillmentInfo(OrderId orderId) {
+        var fulfillmentOrders = fulfillmentOrderDao.getByOrderId(orderId.getStoreId(), orderId.getId());
+        if (CollectionUtils.isEmpty(fulfillmentOrders))
+            return Collections.emptyList();
+
+        List<Long> fulfillmentOrderIds = fulfillmentOrders.stream()
+                .map(FulfillmentOrderDto::getId)
+                .toList();
+        List<FulfillmentOrderLineItemDto> fulfillmentOrderLineItems =
+                fulfillmentOrderLineItemDao.getByFulfillmentOrderIds(orderId.getStoreId(), fulfillmentOrderIds);
+
+        List<FFORecord> records = new ArrayList<>();
+        for (var ffo : fulfillmentOrders) {
+            List<FulfillmentOrderLineItemDto> lines = fulfillmentOrderLineItems.stream()
+                    .filter(line -> Objects.equals(line.getFulfillmentOrderId(), ffo.getId()))
+                    .toList();
+            records.add(new FFORecord(ffo, lines));
+        }
+        return records;
+    }
+
+    private record FFORecord(FulfillmentOrderDto fulfillmentOrder, List<FulfillmentOrderLineItemDto> lineItems) {
     }
 
     private void validateRefundItems(List<RefundRequest.LineItem> refundLineItems, List<RefundCalculateResponse.LineItem> refundableItems) {

@@ -4,26 +4,25 @@ import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.lang3.BooleanUtils;
-import org.apache.commons.lang3.tuple.Pair;
 import org.example.order.order.application.exception.ConstrainViolationException;
+import org.example.order.order.application.exception.UserError;
 import org.example.order.order.application.model.order.request.RefundRequest;
 import org.example.order.order.application.model.order.response.RefundCalculateResponse;
 import org.example.order.order.application.utils.NumberUtils;
-import org.example.order.order.domain.order.model.*;
+import org.example.order.order.domain.order.model.LineItem;
+import org.example.order.order.domain.order.model.Order;
+import org.example.order.order.domain.order.model.OrderId;
+import org.example.order.order.domain.order.model.TaxLine;
 import org.example.order.order.domain.refund.model.OrderAdjustment;
-import org.example.order.order.domain.refund.model.Refund;
 import org.example.order.order.domain.refund.model.RefundLineItem;
-import org.example.order.order.infrastructure.data.dao.FulfillmentOrderDao;
-import org.example.order.order.infrastructure.data.dao.FulfillmentOrderLineItemDao;
 import org.example.order.order.infrastructure.data.dao.ProductDao;
-import org.example.order.order.infrastructure.data.dto.FulfillmentOrderDto;
-import org.example.order.order.infrastructure.data.dto.FulfillmentOrderLineItemDto;
 import org.example.order.order.infrastructure.data.dto.VariantDto;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.*;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
@@ -32,551 +31,322 @@ import java.util.stream.Collectors;
 public class RefundCalculationService {
 
     private final ProductDao productDao;
-    private final FulfillmentOrderDao fulfillmentOrderDao;
-    private final FulfillmentOrderLineItemDao fulfillmentOrderLineItemDao;
 
+    /**
+     *
+     */
     public RefundCalculateResponse calculateRefund(Order order, RefundRequest refundRequest) {
         var shipping = suggestRefundShipping(order, refundRequest.getShipping());
-        var refundItemResult = suggestRefundLineItems(order, refundRequest);
+
+        var refundResult = suggestRefund(order, refundRequest);
 
         return null;
     }
 
-    private RefundItemResult suggestRefundLineItems(Order order, RefundRequest refundRequest) {
-        var refundItemRequests = safeSelect(refundRequest.getRefundLineItems(), (line) -> NumberUtils.isPositive(line.getLineItemId()));
-        if (refundItemRequests.isEmpty()) {
-            // tại sao lại thêm option create => tạo refund tất cả line_items ?
-            if (refundRequest.getOption().isCreate()) {
-                var refundableLineItems = getRefundableLineItems(order);
-                return new RefundItemResult(refundableLineItems, List.of());
-            }
-            return RefundItemResult.EMPTY();
+    /**
+     *
+     */
+
+    private <T> List<T> safeSelect(List<T> resource, Predicate<T> condition) {
+        if (CollectionUtils.isEmpty(resource)) return List.of();
+        return resource.stream().filter(condition).toList();
+    }
+
+    /**
+     * khi refund line cần validate:
+     * - restock type:
+     * .    . + default các input nếu request không có
+     * .    . +
+     * - refund item
+     * - location
+     */
+    private RefundResult suggestRefund(Order order, RefundRequest refundRequest) {
+        var requestLines = safeSelect(refundRequest.getRefundLineItems(), line -> line.getQuantity() > 0);
+        if (CollectionUtils.isEmpty(requestLines)) {
+            return RefundResult.EMPTY;
         }
 
-        return suggestRefundLineItems(order, refundItemRequests, refundRequest.getOption());
-    }
-
-    private RefundItemResult suggestRefundLineItems(Order order, List<RefundRequest.LineItem> refundItemRequests, RefundRequest.Option option) {
-        var refundableLineItems = getRefundableLineItems(order);
-        // bắt bược restock_type
-        forceRestockType(order, refundableLineItems, refundItemRequests);
-
-        validateRefundItem(order.getLineItems(), refundableLineItems, refundItemRequests);
-
-        validateLocation(order.getId(), refundItemRequests);
-
-        refundItemRequests = chooseRefundTypeForLineItem(order, refundableLineItems, refundItemRequests);
-
-        var refundLineItems = calculateRefundLineItemInfo(order, refundableLineItems, refundItemRequests);
-
-        return new RefundItemResult(refundableLineItems, refundLineItems);
-    }
-
-    private List<RefundCalculateResponse.LineItem> calculateRefundLineItemInfo(
-            Order order,
-            List<RefundCalculateResponse.LineItem> refundableLineItems,
-            List<RefundRequest.LineItem> refundItemRequests
-    ) {
-        var calculationLineItems = new ArrayList<RefundCalculateResponse.LineItem>();
-        Map<Integer, Integer> refundedQuantityCache = new HashMap<>();
-        for (var requestLine : refundItemRequests) {
-            var refundableLine = refundableLineItems.stream()
-                    .filter(line -> line.getLineItemId() == requestLine.getLineItemId())
-                    .findFirst().orElseThrow(() -> new ConstrainViolationException("", ""));
-
-            var lineItem = refundableLine.getLineItem();
-            var suggestQuantity = Math.min(refundableLine.getMaximumRefundableQuantity(), requestLine.getQuantity());
-            var refundedQuantity = lineItem.getQuantity() - refundableLine.getMaximumRefundableQuantity();
-
-            int localRefundedQuantity = refundedQuantityCache.getOrDefault(lineItem.getId(), 0);
-            refundedQuantity += localRefundedQuantity;
-
-            var lineItemDiscountDetails = categorizeLineItemDiscount(lineItem, order);
-            var totalCartDiscount = lineItemDiscountDetails.getLeft();
-            var totalProductDiscount = lineItemDiscountDetails.getRight();
-
-            var totalTax = lineItem.getTaxLines().stream()
-                    .map(TaxLine::getPrice)
-                    .reduce(BigDecimal.ZERO, BigDecimal::add);
-
-            var calculateRefundLine = refundableLine.copy();
-            calculationLineItems.add(calculateRefundLine);
-
-            calculateRefundLine.setQuantity(suggestQuantity);
-
-            calculateRefundLine
-                    .setLocationId(requestLine.getLocationId())
-                    .setRestockType(requestLine.getRestockType())
-                    .setRemoval(requestLine.isRemoval());
-
-            var isRefundAllRemaining = suggestQuantity == refundableLine.getMaximumRefundableQuantity();
-            if (isRefundAllRemaining && refundedQuantity == 0) {
-                this.suggestRefundPrice(
-                        calculateRefundLine,
-                        lineItem.getPrice(),
-                        totalProductDiscount,
-                        totalCartDiscount,
-                        totalTax,
-                        lineItem.getQuantity()
-                );
-            } else {
-
-            }
+        var refundableItems = getRefundableItems(order);
+        if (CollectionUtils.isEmpty(refundableItems)) {
+            throw new ConstrainViolationException(UserError.builder()
+                    .message("")
+                    .build());
         }
-        return calculationLineItems;
+        // set lại valid restock cho request_item
+        forceRestockType(refundRequest.getRefundLineItems(), order.getId(), refundableItems);
+
+        // validate item
+        validateRefundItems(refundRequest.getRefundLineItems(), refundableItems);
+
+        return new RefundResult(List.of(), refundableItems);
     }
 
-    private void suggestRefundPrice(
-            RefundCalculateResponse.LineItem calculateRefundLine,
-            BigDecimal lineItemPrice,
-            BigDecimal totalProductDiscount,
-            BigDecimal totalCartDiscount,
-            BigDecimal totalTax,
-            int lineQuantity
-    ) {
-        var quantity = BigDecimal.valueOf(lineQuantity);
-        var discountSubtotal = lineItemPrice.multiply(quantity).subtract(totalProductDiscount);
-        var discountedUnitPrice = discountSubtotal.divide(quantity, RoundingMode.FLOOR);
-        var subtotal = discountSubtotal.subtract(totalCartDiscount);
+    private void validateRefundItems(List<RefundRequest.LineItem> refundLineItems, List<RefundCalculateResponse.LineItem> refundableItems) {
+        var refundLineItemMap = reduceRequestItems(refundLineItems);
+        for (var entry : refundLineItemMap.entrySet()) {
+            int lineItemId = entry.getKey();
 
-        calculateRefundLine
-                .setSubtotal(subtotal)
-                .setTotalTax(totalTax)
-                .setTotalCartDiscount(totalCartDiscount)
-                .setDiscountedPrice(discountedUnitPrice)
-                .setDiscountedSubtotal(discountSubtotal);
-    }
-
-    private Pair<BigDecimal, BigDecimal> categorizeLineItemDiscount(LineItem lineItem, Order order) {
-        if (CollectionUtils.isNotEmpty(order.getDiscountApplications())) {
-            BigDecimal totalCartDiscount = BigDecimal.ZERO;
-            BigDecimal totalProductDiscount = BigDecimal.ZERO;
-            for (var allocation : lineItem.getDiscountAllocations()) {
-                var isProductDiscount = this.filterProductDiscount(allocation, order);
-                if (isProductDiscount) totalProductDiscount = totalProductDiscount.add(allocation.getAmount());
-                else totalCartDiscount = totalCartDiscount.add(allocation.getAmount());
-            }
-            return Pair.of(totalCartDiscount, totalProductDiscount);
-        }
-        return Pair.of(BigDecimal.ZERO, BigDecimal.ZERO);
-    }
-
-    private boolean filterProductDiscount(DiscountAllocation allocation, Order order) {
-        return true;
-    }
-
-    private List<RefundRequest.LineItem> chooseRefundTypeForLineItem(
-            Order order,
-            List<RefundCalculateResponse.LineItem> refundableLineItems,
-            List<RefundRequest.LineItem> refundItemRequests
-    ) {
-        var refundedDetails = getRefundedDetails(order.getRefunds());
-        var restockState = refundableLineItems.stream()
-                .collect(Collectors.toMap(
-                        RefundCalculateResponse.LineItem::getLineItemId,
-                        item -> {
-                            int removableQuantity = item.getLineItem().getFulfillableQuantity();
-                            var refunded = refundedDetails.get(item.getLineItemId());
-                            if (refunded != null) {
-                                removableQuantity = Math.min(
-                                        item.getLineItem().getFulfillableQuantity(),
-                                        item.getMaximumRefundableQuantity());
-                            }
-                            return new RestockItemContext(
-                                    item.getMaximumRefundableQuantity(),
-                                    removableQuantity,
-                                    item.getMaximumRefundableQuantity() - removableQuantity
-                            );
-                        }
-                ));
-
-        var processedRequests = new ArrayList<RefundRequest.LineItem>();
-        for (var refundItemRequest : refundItemRequests) {
-            var state = restockState.get(refundItemRequest.getLineItemId());
-            switch (refundItemRequest.getRestockType()) {
-                case no_restock -> {
-                    var splitLineItems = splitLineItem(refundItemRequest, state);
-                    processedRequests.addAll(splitLineItems);
-                }
-                case cancel -> {
-                    // chỉ cần trừ số lượng trong context
-                    refundItemRequest.setRemoval(true);
-                    state.reduce(refundItemRequest.getQuantity(), true);
-                    processedRequests.add(refundItemRequest);
-                }
-                case _return -> {
-                    refundItemRequest.setRemoval(false);
-                    state.reduce(refundItemRequest.getQuantity(), false);
-                    processedRequests.add(refundItemRequest);
-                }
-            }
-        }
-        return processedRequests;
-    }
-
-    private List<RefundRequest.LineItem> splitLineItem(RefundRequest.LineItem original, RestockItemContext state) {
-        var refundLineItems = new ArrayList<RefundRequest.LineItem>();
-        var executeQuantity = state.reduce(original.getQuantity(), original.isRemoval());
-        if (executeQuantity > 0) {
-            var returnRequest = original.toBuilder()
-                    .removal(original.isRemoval())
-                    .quantity(executeQuantity)
-                    .build();
-            refundLineItems.add(returnRequest);
-        }
-        if (executeQuantity < original.getQuantity()) {
-            var restockType = switch (original.getRestockType()) {
-                case no_restock -> RefundLineItem.RestockType.no_restock;
-                case _return -> RefundLineItem.RestockType.cancel;
-                case cancel -> RefundLineItem.RestockType._return;
-                default -> throw new IllegalArgumentException("not supported for restock type");
-            };
-            var splitQuantity = state.reduce(original.getQuantity() - executeQuantity, !original.isRemoval());
-            var cancelRequest = original.toBuilder()
-                    .restockType(restockType)
-                    .quantity(splitQuantity)
-                    .removal(!original.isRemoval())
-                    .build();
-            refundLineItems.add(cancelRequest);
-        }
-        return refundLineItems;
-    }
-
-    private Map<Integer, RefundItemContext> getRefundedDetails(Set<Refund> refunds) {
-        Map<Integer, RefundItemContext> itemContextMap = new HashMap<>();
-        for (var refund : refunds) {
-            if (CollectionUtils.isEmpty(refund.getRefundLineItems())) {
-                continue;
-            }
-            for (var refundLine : refund.getRefundLineItems()) {
-                var itemContext = itemContextMap.get(refundLine.getLineItemId());
-                if (itemContext == null) {
-                    itemContext = new RefundItemContext(refundLine);
-                    itemContextMap.put(refundLine.getLineItemId(), itemContext);
-                    continue;
-                }
-                itemContext.add(refundLine);
-            }
-        }
-        return itemContextMap;
-    }
-
-    private void validateLocation(OrderId orderId, List<RefundRequest.LineItem> refundItemRequests) {
-        var fulfillmentOrderInfo = getFulfillmentInfo(orderId);
-    }
-
-    private List<FFORecord> getFulfillmentInfo(OrderId orderId) {
-        var fulfillmentOrders = fulfillmentOrderDao.getByOrderId(orderId.getStoreId(), orderId.getId());
-        var fulfillmentOrderIds = fulfillmentOrders.stream()
-                .map(FulfillmentOrderDto::getId)
-                .distinct().toList();
-        var fulfillmentLineItems = fulfillmentOrderLineItemDao.getByFulfillmentOrderIds(orderId.getStoreId(), fulfillmentOrderIds);
-        return fulfillmentOrders.stream()
-                .map(ffo -> {
-                    var ffoId = ffo.getId();
-                    var ffoLines = fulfillmentLineItems.stream()
-                            .filter(line -> line.getFulfillmentOrderId() == ffoId)
-                            .toList();
-                    return new FFORecord(ffo, ffoLines);
-                })
-                .toList();
-    }
-
-    private void validateRefundItem(List<LineItem> lineItems, List<RefundCalculateResponse.LineItem> refundableLineItems, List<RefundRequest.LineItem> refundItemRequests) {
-        var requestedRefundItemMap = reduceToTotalRefundQuantityLineItem(refundItemRequests);
-        for (var refundItemEntry : requestedRefundItemMap.entrySet()) {
-            var noneExistLine = refundableLineItems.stream().noneMatch(line -> line.getLineItemId() == refundItemEntry.getKey());
-            if (noneExistLine) {
-                throw new ConstrainViolationException(
-                        "refund_line_item",
-                        "cannot be blank anh must belong to the order being refunded"
-                );
-            }
-            var refundableLineItem = refundableLineItems.stream()
-                    .filter(line -> line.getLineItemId() == refundItemEntry.getKey())
+            RefundCalculateResponse.LineItem lineItem = refundableItems.stream()
+                    .filter(line -> Objects.equals(lineItemId, line.getLineItemId()))
                     .findFirst()
                     .orElse(null);
-            var validationModel = refundItemEntry.getValue();
-            assert refundableLineItem != null;
-            if (refundableLineItem.getMaximumRefundableQuantity() < validationModel.getQuantity()) {
-                throw new ConstrainViolationException(
-                        "refund_line_item",
-                        ""
-                );
+            if (lineItem == null) {
+                throw new ConstrainViolationException(UserError.builder()
+                        .code("not found")
+                        .message("line item refund not found")
+                        .fields(List.of("line_item_id"))
+                        .build());
             }
-            if (validationModel.getRemoveQuantity() > refundableLineItem.getLineItem().getFulfillableQuantity()) {
-                throw new ConstrainViolationException(
-                        "refund_line_item",
-                        ""
-                );
+
+            var model = entry.getValue();
+            if (model.quantity > lineItem.getMaximumRefundableQuantity()) {
+                throw new ConstrainViolationException(UserError.builder()
+                        .message("")
+                        .build());
+            }
+            if (model.removeQuantity > lineItem.getLineItem().getFulfillableQuantity()) {
+                throw new ConstrainViolationException(UserError.builder()
+                        .message("")
+                        .build());
             }
         }
     }
 
-    private Map<Integer, RefundItemValidationModel> reduceToTotalRefundQuantityLineItem(List<RefundRequest.LineItem> refundItemRequests) {
-        Map<Integer, RefundItemValidationModel> modelMap = new HashMap<>();
-        for (var refundRequest : refundItemRequests) {
-            var model = modelMap.get(refundRequest.getLineItemId());
-            if (model != null) {
-                model.add(refundRequest);
+    private Map<Integer, RefundItemValidationModel> reduceRequestItems(List<RefundRequest.LineItem> refundLineItems) {
+        Map<Integer, RefundItemValidationModel> models = new HashMap<>();
+        for (var item : refundLineItems) {
+            int lineItemId = item.getLineItemId();
+
+            var model = models.get(lineItemId);
+            if (model == null) {
+                model = new RefundItemValidationModel(item);
+                models.put(lineItemId, model);
                 continue;
             }
-            model = new RefundItemValidationModel(refundRequest);
-            modelMap.put(refundRequest.getLineItemId(), model);
+            model.add(item);
+            models.put(lineItemId, model);
         }
-        return modelMap;
+        return models;
     }
 
-    private void forceRestockType(Order order, List<RefundCalculateResponse.LineItem> refundableLineItems, List<RefundRequest.LineItem> refundItemRequests) {
-        forceDefaultRestockType(refundItemRequests);
-        forceRestockTypeIfProductNotExists(order, refundItemRequests, refundableLineItems);
-    }
+    @Getter
+    private static class RefundItemValidationModel {
+        private int quantity;
+        private int removeQuantity;
 
-    private void forceRestockTypeIfProductNotExists(Order order, List<RefundRequest.LineItem> refundItemRequests, List<RefundCalculateResponse.LineItem> refundableLineItems) {
-        var lineItemMap = refundableLineItems.stream()
-                .collect(Collectors.toMap(
-                        RefundCalculateResponse.LineItem::getLineItemId,
-                        RefundCalculateResponse.LineItem::getLineItem,
-                        (line1, line2) -> line1));
-        var existVariantOfLines = new ArrayList<Pair<RefundRequest.LineItem, Integer>>();
+        public RefundItemValidationModel(RefundRequest.LineItem item) {
+            add(item);
+        }
 
-        for (var refundRequest : refundItemRequests) {
-            var lineItemId = refundRequest.getLineItemId();
-            var lineItem = lineItemMap.get(lineItemId);
-            if (lineItem == null) continue; // chưa xử lý ở đây
-            if (lineItem.getVariantInfo() != null && lineItem.getVariantInfo().getVariantId() != null) {
-                existVariantOfLines.add(Pair.of(refundRequest, lineItem.getVariantInfo().getVariantId()));
-            } else {
-                // line custom thì set restock_type = no_restock
-                refundRequest.setRestockType(RefundLineItem.RestockType.no_restock);
+        public void add(RefundRequest.LineItem item) {
+            this.quantity += item.getQuantity();
+            if (item.isRemoval()) {
+                this.removeQuantity += item.getQuantity();
             }
         }
+    }
 
-        if (CollectionUtils.isNotEmpty(existVariantOfLines)) {
-            var variantIds = existVariantOfLines.stream()
-                    .map(Pair::getValue)
-                    .filter(NumberUtils::isPositive)
-                    .distinct().toList();
-            var variants = productDao.findVariantByListIds(order.getId().getStoreId(), variantIds);
-            var variantIdExists = variants.stream().map(VariantDto::getId).distinct().toList();
-            existVariantOfLines.stream()
-                    .filter(pair -> !variantIdExists.contains(pair.getValue()))
-                    .forEach(pair -> {
-                        var refundRequest = pair.getKey();
-                        refundRequest.setRestockType(RefundLineItem.RestockType.no_restock);
+    private void forceRestockType(
+            List<RefundRequest.LineItem> refundItems,
+            OrderId orderId,
+            List<RefundCalculateResponse.LineItem> refundableItems
+    ) {
+        forceDefaultRestockType(refundItems);
+
+        forceRestockTypeWithProduct(refundItems, orderId, refundableItems);
+    }
+
+    private void forceRestockTypeWithProduct(
+            List<RefundRequest.LineItem> refundItems,
+            OrderId orderId,
+            List<RefundCalculateResponse.LineItem> refundableItems
+    ) {
+        var lineItemMap = refundableItems.stream()
+                .map(RefundCalculateResponse.LineItem::getLineItem)
+                .collect(Collectors.toMap(
+                        LineItem::getId,
+                        Function.identity()));
+
+        Map<Integer, Integer> variantMap = new HashMap<>();
+        for (var item : refundItems) {
+            int lineItemId = item.getLineItemId();
+            LineItem lineItem = lineItemMap.get(lineItemId);
+            // validate not here
+            if (lineItem == null)
+                continue;
+
+            Integer variantId = lineItem.getVariantInfo().getVariantId();
+            if (variantId != null) {
+                variantMap.put(lineItemId, variantId);
+                continue;
+            }
+
+            item.setRestockType(RefundLineItem.RestockType.no_restock);
+            item.setRemoval(true);
+        }
+
+        if (!variantMap.isEmpty()) {
+            List<Integer> variantIds = variantMap.values().stream().distinct().toList();
+
+            int storeId = orderId.getStoreId();
+            List<VariantDto> variants = productDao.findVariantByListIds(storeId, variantIds);
+
+            refundableItems.stream()
+                    .filter(item -> variantMap.containsKey(item.getLineItemId()))
+                    .forEach(item -> {
+                        int variantId = variantMap.get(item.getLineItemId());
+                        var variant = variants.stream()
+                                .filter(v -> Objects.equals(v.getId(), variantId))
+                                .findFirst()
+                                .orElse(null);
+                        if (variant == null) {
+                            item.setRestockType(RefundLineItem.RestockType.no_restock);
+                            item.setRemoval(true);
+                        }
                     });
         }
     }
 
-    // setup or build lại các field trong refund_requests
-    private void forceDefaultRestockType(List<RefundRequest.LineItem> refundItemRequests) {
-        if (CollectionUtils.isEmpty(refundItemRequests)) return;
-
-        for (var refundLine : refundItemRequests) {
-            if (refundLine.getRestockType() == null) {
-                refundLine.setRestockType(RefundLineItem.RestockType.no_restock);
+    private void forceDefaultRestockType(List<RefundRequest.LineItem> refundItems) {
+        for (var item : refundItems) {
+            if (item.getRestockType() == null) {
+                item.setRestockType(RefundLineItem.RestockType.no_restock);
             }
-            switch (refundLine.getRestockType()) {
-                case _return -> refundLine.setRemoval(false);
-                case cancel -> refundLine.setRemoval(true);
+            switch (item.getRestockType()) {
+                case _return -> item.setRemoval(false);
+                case cancel -> item.setRemoval(true);
             }
         }
     }
 
-    private List<RefundCalculateResponse.LineItem> getRefundableLineItems(Order order) {
-        Map<Integer, Integer> refundedLineMap = new HashMap<>();
+    private List<RefundCalculateResponse.LineItem> getRefundableItems(Order order) {
         List<RefundCalculateResponse.LineItem> refundableLineItems = new ArrayList<>();
 
+        Map<Integer, Integer> refundedLineItems = new HashMap<>();
         if (CollectionUtils.isNotEmpty(order.getRefunds())) {
-            order.getRefunds().forEach(refund -> {
-                var refundedLineItems = refund.getRefundLineItems();
-                for (var refundLine : refundedLineItems) {
-                    refundedLineMap.compute(
-                            refundLine.getLineItemId(),
-                            (lineItemId, existedQuantity) -> {
-                                if (existedQuantity == null) return refundLine.getQuantity();
-                                return existedQuantity + refundLine.getQuantity();
-                            });
-                }
-            });
+            order.getRefunds().stream()
+                    .filter(refund -> CollectionUtils.isNotEmpty(refund.getRefundLineItems()))
+                    .flatMap(refund -> refund.getRefundLineItems().stream())
+                    .forEach(refundLine -> refundedLineItems.merge(refundLine.getLineItemId(), refundLine.getQuantity(), Integer::sum));
         }
 
         for (var lineItem : order.getLineItems()) {
-            if (LineItem.FulfillmentStatus.restocked == lineItem.getFulfillmentStatus()) {
-                continue;
-            }
+            int lineItemId = lineItem.getId();
+            int lineItemQuantity = lineItem.getQuantity();
 
-            var lineItemId = lineItem.getId();
-            var refundedQuantity = refundedLineMap.getOrDefault(lineItemId, 0);
-            if (lineItem.getQuantity() > refundedQuantity) {
-                var refundLineItem = new RefundCalculateResponse.LineItem()
-                        .setLineItem(lineItem)
-                        .setLineItemId(lineItemId)
-                        .setPrice(lineItem.getDiscountUnitPrice())
-                        .setOriginalPrice(lineItem.getPrice())
-                        .setMaximumRefundableQuantity(lineItem.getQuantity() - refundedQuantity);
-                refundableLineItems.add(refundLineItem);
-            }
+            int refundedQuantity = refundedLineItems.getOrDefault(lineItemId, 0);
+            int remainingQuantity = lineItemQuantity - refundedQuantity;
+            if (remainingQuantity <= 0)
+                continue;
+
+            var refundItem = RefundCalculateResponse.LineItem.builder()
+                    .lineItem(lineItem)
+                    .lineItemId(lineItemId)
+                    .quantity(lineItemQuantity)
+                    .maximumRefundableQuantity(remainingQuantity)
+                    .price(lineItem.getPrice())
+                    .subtotal(lineItem.getSubtotalLinePrice())
+                    .discountedPrice(lineItem.getDiscountedPrice())
+                    .build();
+            refundableLineItems.add(refundItem);
         }
 
         return refundableLineItems;
     }
 
-    private <T> List<T> safeSelect(List<T> requests, Predicate<T> condition) {
-        if (CollectionUtils.isEmpty(requests)) return Collections.emptyList();
-        return requests.stream().filter(condition).toList();
+    private record RefundResult(List<RefundCalculateResponse.LineItem> refundItems,
+                                List<RefundCalculateResponse.LineItem> refundableItems) {
+        public static final RefundResult EMPTY = new RefundResult(List.of(), List.of());
     }
 
-    private RefundCalculateResponse.Shipping suggestRefundShipping(Order order, RefundRequest.Shipping request) {
-        var refundSuggestion = new RefundCalculateResponse.Shipping();
+    /**
+     * Tính toán lại
+     */
+    private RefundCalculateResponse.Shipping suggestRefundShipping(Order order, RefundRequest.Shipping refundShippingRequest) {
+        RefundCalculateResponse.Shipping suggestion = new RefundCalculateResponse.Shipping();
 
-        var totalShipping = BigDecimal.ZERO;
-        var refundedShipping = BigDecimal.ZERO;
-        var totalTax = BigDecimal.ZERO;
-        var refundedTax = BigDecimal.ZERO;
+        BigDecimal totalShipping = BigDecimal.ZERO;
+        BigDecimal totalTax = BigDecimal.ZERO;
+        BigDecimal totalShippingRefunded = BigDecimal.ZERO;
+        BigDecimal totalTaxRefunded = BigDecimal.ZERO;
 
         if (CollectionUtils.isNotEmpty(order.getShippingLines())) {
-            for (var shippingLine : order.getShippingLines()) {
-                totalShipping = totalShipping.add(shippingLine.getPrice());
-                if (CollectionUtils.isEmpty(shippingLine.getTaxLines())) continue;
-                totalTax = totalTax.add(
-                        shippingLine.getTaxLines().stream()
-                                .map(TaxLine::getPrice)
-                                .reduce(BigDecimal.ZERO, BigDecimal::add));
+            for (var shipping : order.getShippingLines()) {
+                totalShipping = totalShipping.add(shipping.getPrice());
+
+                if (CollectionUtils.isEmpty(shipping.getTaxLines()))
+                    continue;
+                totalTax = totalTax.add(shipping.getTaxLines().stream()
+                        .map(TaxLine::getPrice)
+                        .reduce(BigDecimal.ZERO, BigDecimal::add));
             }
         }
 
         if (CollectionUtils.isNotEmpty(order.getRefunds())) {
-            var shippingRefunds = order.getRefunds().stream()
+            List<OrderAdjustment> orderAdjustments = order.getRefunds().stream()
                     .filter(refund -> CollectionUtils.isNotEmpty(refund.getOrderAdjustments()))
                     .flatMap(refund -> refund.getOrderAdjustments().stream())
                     .filter(oa -> oa.getRefundKind() == OrderAdjustment.RefundKind.shipping_refund)
                     .toList();
-            if (CollectionUtils.isNotEmpty(shippingRefunds)) {
-                for (var shippingRefund : shippingRefunds) {
-                    refundedShipping = refundedShipping.add(shippingRefund.getAmount());
-                    if (order.isTaxIncluded()) {
-                        refundedTax = refundedTax.add(shippingRefund.getTaxAmount());
-                    }
+            for (var adjustment : orderAdjustments) {
+                totalShippingRefunded = totalShippingRefunded.add(adjustment.getAmount());
+
+                // full_amount khi hoàn tiền shipping = amount + tax_amount
+                // nếu taxes_included => total_refund = amount + tax_amount
+                if (order.isTaxIncluded()) {
+                    totalShippingRefunded = totalShippingRefunded.add(adjustment.getTaxAmount());
                 }
+
+                totalTaxRefunded = totalTaxRefunded.add(adjustment.getTaxAmount());
             }
         }
 
-        var maxRefundableAmount = totalShipping.subtract(refundedShipping);
-        refundSuggestion.setMaximumRefundable(maxRefundableAmount);
+        // calculate refund
+        suggestion.setMaximumRefundable(totalShipping.subtract(totalShippingRefunded));
+        if (refundShippingRequest != null) {
+            int accuracyRounding = order.getMoneyInfo().getCurrency().getDefaultFractionDigits();
 
-        if (request != null) {
-            var roundingAccuracy = order.getMoneyInfo().getCurrency().getDefaultFractionDigits();
-            if (NumberUtils.isPositive(request.getAmount())) {
-                refundSuggestion.setAmount(request.getAmount().setScale(roundingAccuracy, RoundingMode.FLOOR));
-            } else if (BooleanUtils.isTrue(request.getFullRefund())) {
-                refundSuggestion.setAmount(refundSuggestion.getMaximumRefundable());
-            }
-
-            var compareAmountResult = refundSuggestion.getAmount().compareTo(refundSuggestion.getMaximumRefundable());
-
-            if (compareAmountResult > 0) {
-                throw new ConstrainViolationException(
-                        "refund_amount",
-                        "must be less than or equal to maximum_refundable"
+            // ưu tiên tính theo amount
+            if (NumberUtils.isPositive(refundShippingRequest.getAmount())) {
+                suggestion.setAmount(
+                        refundShippingRequest.getAmount().setScale(accuracyRounding, RoundingMode.FLOOR)
                 );
+            } else if (BooleanUtils.isTrue(refundShippingRequest.getFullRefund())) {
+                suggestion.setAmount(suggestion.getMaximumRefundable());
             }
 
-            BigDecimal suggestTaxAmount;
+            if (!NumberUtils.isPositive(suggestion.getAmount())) {
+                throw new ConstrainViolationException(UserError.builder()
+                        .message("require amount option for refund")
+                        .fields(List.of("shipping"))
+                        .build());
+            }
+
+            int compareAmountResult = suggestion.getAmount()
+                    .compareTo(suggestion.getMaximumRefundable());
+            if (compareAmountResult > 0) {
+                throw new ConstrainViolationException(UserError.builder()
+                        .message("amount must be less than or equal to maximum_refundable")
+                        .fields(List.of("amount"))
+                        .build());
+            }
+
+            BigDecimal refundTax;
             if (compareAmountResult == 0) {
-                suggestTaxAmount = totalTax.subtract(refundedTax)
-                        .setScale(roundingAccuracy, RoundingMode.FLOOR);
+                refundTax = totalTax.subtract(totalTaxRefunded);
             } else {
-                suggestTaxAmount = refundSuggestion.getAmount()
-                        .multiply(totalTax)
-                        .divide(totalShipping, roundingAccuracy, RoundingMode.FLOOR);
+                refundTax = suggestion.getAmount().multiply(totalTax)
+                        .divide(totalShipping, accuracyRounding, RoundingMode.FLOOR);
             }
-            refundSuggestion.setTax(suggestTaxAmount);
+            suggestion.setTax(refundTax.setScale(accuracyRounding, RoundingMode.FLOOR));
         }
 
-        return refundSuggestion;
-    }
+        // strip zero
+        suggestion
+                .setAmount(suggestion.getAmount().stripTrailingZeros())
+                .setTax(suggestion.getTax().stripTrailingZeros())
+                .setMaximumRefundable(suggestion.getMaximumRefundable().stripTrailingZeros());
 
-    @Getter
-    private static class RestockItemContext {
-        private int remaining;
-        private int cancelable;
-        private int returnable;
-
-        public RestockItemContext(int remaining, int cancelable, int returnable) {
-            this.remaining = remaining;
-            this.cancelable = cancelable;
-            this.returnable = returnable;
-        }
-
-        public int reduce(int quantity, boolean removal) {
-            if (removal) {
-                if (this.cancelable == 0) return 0;
-                int toCancel = Math.min(quantity, cancelable);
-                this.cancelable -= toCancel;
-                this.remaining -= toCancel;
-                return toCancel;
-            } else {
-                if (this.returnable == 0) return 0;
-                int toReturn = Math.min(returnable, quantity);
-                this.returnable -= toReturn;
-                this.remaining -= toReturn;
-                return toReturn;
-            }
-        }
-    }
-
-    @Getter
-    private static class RefundItemContext {
-        private int refunded; // sô lượng đã trả về
-        private int removed; // số lượng mà cancel
-        private int returned; // số lượng đã được hoàn lại kho
-
-        public RefundItemContext(RefundLineItem refundLine) {
-            this.add(refundLine);
-        }
-
-        public void add(RefundLineItem refundLine) {
-            this.refunded += refundLine.getQuantity();
-            switch (refundLine.getRestockType()) {
-                case cancel -> this.removed += refundLine.getQuantity();
-                case _return -> this.returned += refundLine.getQuantity();
-                case no_restock -> {
-                    if (refundLine.isRemoval()) {
-                        this.removed += refundLine.getQuantity();
-                    } else {
-                        this.returned += refundLine.getQuantity();
-                    }
-                }
-            }
-        }
-    }
-
-    private record FFORecord(FulfillmentOrderDto fulfillmentOrder,
-                             List<FulfillmentOrderLineItemDto> fulfillmentOrderLineItems) {
-    }
-
-    @Getter
-    private static class RefundItemValidationModel {
-        private int quantity; // tổng quantity refund của line_item đó
-        private int removeQuantity; // tổng quantity, của line có removal = true
-
-        public RefundItemValidationModel(RefundRequest.LineItem refundRequest) {
-            this.add(refundRequest);
-        }
-
-        public void add(RefundRequest.LineItem refundRequest) {
-            this.quantity += refundRequest.getQuantity();
-            if (refundRequest.isRemoval()) {
-                this.removeQuantity += refundRequest.getQuantity();
-            }
-        }
-    }
-
-    record RefundItemResult(List<RefundCalculateResponse.LineItem> refundableLineItems,
-                            List<RefundCalculateResponse.LineItem> refundLineItems) {
-        static RefundItemResult EMPTY() {
-            return new RefundItemResult(List.of(), List.of());
-        }
+        return suggestion;
     }
 }

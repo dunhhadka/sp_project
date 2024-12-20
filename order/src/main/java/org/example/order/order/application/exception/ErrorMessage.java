@@ -1,7 +1,14 @@
 package org.example.order.order.application.exception;
 
+import com.fasterxml.jackson.core.JsonGenerator;
+import com.fasterxml.jackson.databind.JsonSerializer;
+import com.fasterxml.jackson.databind.SerializerProvider;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+
+import java.io.IOException;
 import java.util.*;
 
+@JsonSerialize(using = ErrorMessage.ErrorMessageSerialize.class)
 public class ErrorMessage {
 
     private String message;
@@ -16,6 +23,14 @@ public class ErrorMessage {
 
     public List<UserError> getUserErrors() {
         return Collections.unmodifiableList(userErrors);
+    }
+
+    public static class ErrorMessageSerialize extends JsonSerializer<ErrorMessage> {
+
+        @Override
+        public void serialize(ErrorMessage errorMessage, JsonGenerator jsonGenerator, SerializerProvider serializerProvider) throws IOException {
+
+        }
     }
 
     public static class ErrorMessageBuilder {

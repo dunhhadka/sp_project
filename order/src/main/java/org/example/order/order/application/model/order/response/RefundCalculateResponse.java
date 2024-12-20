@@ -32,6 +32,7 @@ public class RefundCalculateResponse {
 
     @Getter
     @Setter
+    @Builder
     @Accessors(chain = true)
     @AllArgsConstructor
     @NoArgsConstructor

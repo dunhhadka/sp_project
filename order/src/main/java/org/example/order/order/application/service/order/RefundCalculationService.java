@@ -42,6 +42,7 @@ public class RefundCalculationService {
     private final FulfillmentOrderDao fulfillmentOrderDao;
     private final FulfillmentOrderLineItemDao fulfillmentOrderLineItemDao;
 
+
     /**
      *
      */
@@ -93,9 +94,22 @@ public class RefundCalculationService {
 
         var refundItems = !orderWithDiscount(order)
                 ? calculateRefundLineItem(order, refundRequest, refundableItems)
-                : null;
+                : calculateLegacyDiscountedRefundLineItemInfo(order, refundRequest, refundableItems);
 
-        return new RefundResult(List.of(), refundableItems);
+        return new RefundResult(refundItems, refundableItems);
+    }
+
+    private List<RefundCalculateResponse.LineItem> calculateLegacyDiscountedRefundLineItemInfo(
+            Order order,
+            RefundRequest refundRequest,
+            List<RefundCalculateResponse.LineItem> refundableItems
+    ) {
+        var orderDiscountCodeAmount = BigDecimal.ZERO;
+        if (CollectionUtils.isNotEmpty(order.getDiscountCodes())) {
+            orderDiscountCodeAmount = order.getDiscountCodes().get(0).getAmount();
+        }
+
+        return List.of();
     }
 
     private List<RefundCalculateResponse.LineItem> calculateRefundLineItem(
@@ -160,39 +174,101 @@ public class RefundCalculationService {
                         lineItem.getQuantity(), refundedQuantity,
                         suggestRefundQuantity
                 );
+                var suggestCartDiscount = suggestRefundAmount(
+                        totalCartDiscount, roundingAccuracy,
+                        lineItem.getQuantity(), refundedQuantity,
+                        suggestRefundQuantity
+                );
+                var suggestProductDiscount = suggestRefundAmount(
+                        totalProductDiscount, roundingAccuracy,
+                        lineItem.getQuantity(), refundedQuantity,
+                        suggestRefundQuantity
+                );
+                this.suggestRefundPrice(
+                        calculateRefundLine,
+                        lineItem.getPrice(),
+                        suggestProductDiscount,
+                        suggestCartDiscount,
+                        suggestTotalTax,
+                        suggestRefundQuantity
+                );
             }
+
+            processedLine.merge(lineItemId, suggestRefundQuantity, Integer::sum);
         }
         return calculateItemResults;
     }
+
+    @Getter
+    private abstract static class RefundStrategy {
+        private final BigDecimal result;
+
+        protected RefundStrategy(BigDecimal total, int quantity, int refundedQuantity, int suggestQuantity, int roundingAccuracy) {
+            assert total != null;
+            long totalL = roundingAccuracy == 0
+                    ? total.longValue()
+                    : total.movePointRight(roundingAccuracy).longValue();
+            long subtotalL = subtotalWithRounding(totalL, quantity, refundedQuantity, suggestQuantity);
+            this.result = BigDecimal.valueOf(subtotalL).movePointLeft(roundingAccuracy);
+        }
+
+        private long subtotalWithRounding(long amount, int quantity, int refundedQuantity, int suggestQuantity) {
+            var remain = amount % quantity;
+            if (remain == 0) return (amount / quantity) * suggestQuantity;
+            var rounding = roundingFrom(quantity, remain, refundedQuantity, suggestQuantity);
+            return (amount / quantity) * suggestQuantity + rounding;
+        }
+
+        protected abstract int roundingFrom(int quantity, long remain, int refundedQuantity, int suggestQuantity);
+    }
+
+    private static class FirstNRefundStrategy extends RefundStrategy {
+
+        protected FirstNRefundStrategy(BigDecimal total, int quantity, int refundedQuantity, int suggestQuantity, int roundingAccuracy) {
+            super(total, quantity, refundedQuantity, suggestQuantity, roundingAccuracy);
+        }
+
+        @Override
+        protected int roundingFrom(int quantity, long remain, int refundedQuantity, int suggestQuantity) {
+            var delta = (int) remain;
+            return roundingFromFirstItem(refundedQuantity, suggestQuantity, delta);
+        }
+
+        private int roundingFromFirstItem(int refundedQuantity, int suggestQuantity, int delta) {
+            return 0;
+        }
+    }
+
+    private static class LastNRefundStrategy extends RefundStrategy {
+
+        protected LastNRefundStrategy(BigDecimal total, int quantity, int refundedQuantity, int suggestQuantity, int roundingAccuracy) {
+            super(total, quantity, refundedQuantity, suggestQuantity, roundingAccuracy);
+        }
+
+        @Override
+        protected int roundingFrom(int quantity, long remain, int refundedQuantity, int suggestQuantity) {
+            return 0;
+        }
+    }
+
 
     private BigDecimal suggestRefundAmount(
             BigDecimal amount, int roundingAccuracy,
             int totalQuantity, int refundedQuantity,
             int suggestRefundQuantity
     ) {
-        return suggestRefundAmount(
-                amount, roundingAccuracy,
-                totalQuantity, refundedQuantity,
-                suggestRefundQuantity, RoundingStyle.last_n
-        );
+        RefundStrategy refundStrategy = new FirstNRefundStrategy(amount, totalQuantity,
+                refundedQuantity, suggestRefundQuantity, roundingAccuracy);
+
+        return refundStrategy.getResult();
     }
 
-    private BigDecimal suggestRefundAmount(
-            BigDecimal amount, int roundingAccuracy,
-            int totalQuantity, int refundedQuantity,
-            int suggestRefundQuantity, RoundingStyle rs
-    ) {
-        long totalAmountL = roundingAccuracy == 0
-                ? amount.longValue()
-                : amount.movePointRight(roundingAccuracy).longValue();
-        long subtotalAmountL = subtotalWithRounding(totalAmountL, totalQuantity, refundedQuantity, suggestRefundQuantity, rs);
-        if (roundingAccuracy == 0) return BigDecimal.valueOf(totalAmountL);
-        return BigDecimal.valueOf(subtotalAmountL).movePointLeft(roundingAccuracy);
-    }
-
-    private long subtotalWithRounding(long amount, int quantity, int refundedQuantity, int suggestRefundQuantity, RoundingStyle rs) {
-        
-    }
+    /**
+     * - amount: price của 1 quantity
+     * - quantity: tổng quantity ban đầu
+     * - refundedQuantity: Tổng đã refund
+     * - suggestQuantity: Tổng refund cần tình toán
+     */
 
     /**
      * first_n: Quy tắc làm tròn mà trong đó n phần tử đầu tiên sẽ được làm tròn lên (round up),

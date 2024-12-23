@@ -4,6 +4,7 @@ import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.lang3.BooleanUtils;
+import org.apache.commons.lang3.tuple.Pair;
 import org.example.order.SapoClient;
 import org.example.order.order.application.exception.ConstrainViolationException;
 import org.example.order.order.application.exception.UserError;
@@ -11,10 +12,7 @@ import org.example.order.order.application.model.order.request.LocationFilter;
 import org.example.order.order.application.model.order.request.RefundRequest;
 import org.example.order.order.application.model.order.response.RefundCalculateResponse;
 import org.example.order.order.application.utils.NumberUtils;
-import org.example.order.order.domain.order.model.LineItem;
-import org.example.order.order.domain.order.model.Order;
-import org.example.order.order.domain.order.model.OrderId;
-import org.example.order.order.domain.order.model.TaxLine;
+import org.example.order.order.domain.order.model.*;
 import org.example.order.order.domain.refund.model.OrderAdjustment;
 import org.example.order.order.domain.refund.model.RefundLineItem;
 import org.example.order.order.infrastructure.data.dao.FulfillmentOrderDao;
@@ -93,7 +91,171 @@ public class RefundCalculationService {
         // validate location
         validateLocation(refundRequest.getRefundLineItems(), order);
 
+        var refundItems = !orderWithDiscount(order)
+                ? calculateRefundLineItem(order, refundRequest, refundableItems)
+                : null;
+
         return new RefundResult(List.of(), refundableItems);
+    }
+
+    private List<RefundCalculateResponse.LineItem> calculateRefundLineItem(
+            Order order,
+            RefundRequest refundRequest,
+            List<RefundCalculateResponse.LineItem> refundableItems
+    ) {
+        /**
+         * Xử lý nếu nhiều item có cùng line_item_id
+         * Xử lý: Tạo cache => save lại total refund quantity của line_item_id
+         * Sau đó xử lý tính toán cho các item sau nếu trùng line_item_id
+         * */
+
+        var calculateItemResults = new ArrayList<RefundCalculateResponse.LineItem>();
+        Map<Integer, Integer> processedLine = new HashMap<>();
+        for (var requestLine : refundRequest.getRefundLineItems()) {
+            int lineItemId = requestLine.getLineItemId();
+
+            var refundableLine = refundableItems.stream()
+                    .filter(item -> Objects.equals(item.getLineItemId(), lineItemId))
+                    .findFirst().get(); // NOTE: never not null
+
+            LineItem lineItem = refundableLine.getLineItem();
+            int localRefundedQuantity = processedLine.getOrDefault(lineItemId, 0); // tổng refund quantity đã được xử lý trước đó.
+            refundableLine.setMaximumRefundableQuantity(refundableLine.getMaximumRefundableQuantity() - localRefundedQuantity);
+            int refundedQuantity = lineItem.getQuantity() - refundableLine.getMaximumRefundableQuantity(); // tổng refund đã có trong order
+
+            int suggestRefundQuantity = Math.min(requestLine.getQuantity(), refundableLine.getMaximumRefundableQuantity());
+
+            var lineItemDiscountDetails = categorizeLineItemDiscount(lineItem, order);
+            BigDecimal totalProductDiscount = lineItemDiscountDetails.getLeft();
+            BigDecimal totalCartDiscount = lineItemDiscountDetails.getRight();
+
+            BigDecimal totalTax = lineItem.getTaxLines().stream()
+                    .map(TaxLine::getPrice)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+            var calculateRefundLine = refundableLine.copy();
+            calculateItemResults.add(calculateRefundLine);
+
+            calculateRefundLine.setQuantity(suggestRefundQuantity);
+
+            calculateRefundLine
+                    .setLocationId(requestLine.getLocationId())
+                    .setRestockType(requestLine.getRestockType())
+                    .setRemoval(requestLine.isRemoval());
+
+            boolean refundAllRemaining = suggestRefundQuantity == refundableLine.getMaximumRefundableQuantity();
+            if (refundAllRemaining && refundedQuantity == 0) { // nếu lần đầu tiên refund tất cả
+                this.suggestRefundPrice(
+                        calculateRefundLine,
+                        lineItem.getPrice(),
+                        totalProductDiscount,
+                        totalCartDiscount,
+                        totalTax,
+                        suggestRefundQuantity
+                );
+            } else {
+                var roundingAccuracy = order.getMoneyInfo().getCurrency().getDefaultFractionDigits();
+                var suggestTotalTax = suggestRefundAmount(
+                        totalTax, roundingAccuracy,
+                        lineItem.getQuantity(), refundedQuantity,
+                        suggestRefundQuantity
+                );
+            }
+        }
+        return calculateItemResults;
+    }
+
+    private BigDecimal suggestRefundAmount(
+            BigDecimal amount, int roundingAccuracy,
+            int totalQuantity, int refundedQuantity,
+            int suggestRefundQuantity
+    ) {
+        return suggestRefundAmount(
+                amount, roundingAccuracy,
+                totalQuantity, refundedQuantity,
+                suggestRefundQuantity, RoundingStyle.last_n
+        );
+    }
+
+    private BigDecimal suggestRefundAmount(
+            BigDecimal amount, int roundingAccuracy,
+            int totalQuantity, int refundedQuantity,
+            int suggestRefundQuantity, RoundingStyle rs
+    ) {
+        long totalAmountL = roundingAccuracy == 0
+                ? amount.longValue()
+                : amount.movePointRight(roundingAccuracy).longValue();
+        long subtotalAmountL = subtotalWithRounding(totalAmountL, totalQuantity, refundedQuantity, suggestRefundQuantity, rs);
+        if (roundingAccuracy == 0) return BigDecimal.valueOf(totalAmountL);
+        return BigDecimal.valueOf(subtotalAmountL).movePointLeft(roundingAccuracy);
+    }
+
+    private long subtotalWithRounding(long amount, int quantity, int refundedQuantity, int suggestRefundQuantity, RoundingStyle rs) {
+        
+    }
+
+    /**
+     * first_n: Quy tắc làm tròn mà trong đó n phần tử đầu tiên sẽ được làm tròn lên (round up),
+     * các phần tử còn lại sẽ được làm tròn xuống (round down).
+     * <p>
+     * last_n: Quy tắc làm tròn mà trong đó n phần tử cuối cùng sẽ được làm tròn lên (round up),
+     * các phần tử còn lại sẽ được làm tròn xuống (round down).
+     */
+    public enum RoundingStyle {
+        first_n,
+        last_n
+    }
+
+    /**
+     * lineItemPrice, totalProductDiscount, totalCartDiscount, totalTax tương ứng với suggestQuantity
+     */
+    private void suggestRefundPrice(
+            RefundCalculateResponse.LineItem calculateRefundLine,
+            BigDecimal lineItemPrice,
+            BigDecimal totalProductDiscount,
+            BigDecimal totalCartDiscount,
+            BigDecimal totalTax,
+            int suggestQuantity
+    ) {
+        var quantity = BigDecimal.valueOf(suggestQuantity);
+        var discountSubtotal = lineItemPrice.multiply(quantity).subtract(totalProductDiscount);
+        var discountedUnitPrice = discountSubtotal.divide(quantity, RoundingMode.FLOOR);
+        var subtotal = discountSubtotal.subtract(totalCartDiscount);
+
+        calculateRefundLine
+                .setSubtotal(discountSubtotal)
+                .setTotalTax(totalTax)
+                .setTotalCartDiscount(totalCartDiscount)
+                .setDiscountedPrice(discountedUnitPrice)
+                .setDiscountedSubtotal(subtotal);
+    }
+
+    private org.apache.commons.lang3.tuple.Pair<BigDecimal, BigDecimal> categorizeLineItemDiscount(LineItem lineItem, Order order) {
+        if (CollectionUtils.isEmpty(lineItem.getDiscountAllocations()))
+            return Pair.of(BigDecimal.ZERO, BigDecimal.ZERO);
+
+        BigDecimal productDiscount = BigDecimal.ZERO;
+        BigDecimal cartDiscount = BigDecimal.ZERO;
+        for (var allocation : lineItem.getDiscountAllocations()) {
+            if (isCartDiscount(allocation, order)) {
+                cartDiscount = cartDiscount.add(allocation.getAmount());
+            } else {
+                productDiscount = productDiscount.add(allocation.getAmount());
+            }
+        }
+        return Pair.of(productDiscount, cartDiscount);
+    }
+
+    private boolean isCartDiscount(DiscountAllocation allocation, Order order) {
+        int applicationIndex = allocation.getApplicationIndex();
+        var application = order.getDiscountApplications().get(applicationIndex);
+        assert application != null;
+        return application.getRuleType() == DiscountApplication.RuleType.order;
+    }
+
+    private boolean orderWithDiscount(Order order) {
+        return CollectionUtils.isNotEmpty(order.getDiscountApplications())
+                || CollectionUtils.isNotEmpty(order.getDiscountCodes());
     }
 
     private void validateLocation(List<RefundRequest.LineItem> refundLineItems, Order order) {

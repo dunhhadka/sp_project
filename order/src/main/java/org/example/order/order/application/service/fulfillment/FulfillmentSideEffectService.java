@@ -57,7 +57,7 @@ public class FulfillmentSideEffectService {
                 var modifiedQuantity = Math.min(fulfillmentLine.getEffectiveQuantity(), effectiveQuantity);
                 if (modifiedQuantity > 0) {
                     modifiedMap.put(fulfillmentLineItemId, modifiedQuantity);
-                    effectiveQuantityMap.put(fulfillmentLineItemId, effectiveQuantity - modifiedQuantity);
+                    effectiveQuantityMap.put((int) fulfillmentLineItemId, effectiveQuantity - modifiedQuantity);
                 }
             }
             fulfillment.updateEffectiveQuantity(modifiedMap, Fulfillment.EffectQuantityType.subtract);

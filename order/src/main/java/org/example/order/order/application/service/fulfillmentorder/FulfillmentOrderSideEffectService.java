@@ -6,12 +6,15 @@ import org.example.order.order.application.exception.NotFoundException;
 import org.example.order.order.application.model.order.request.AdjustmentRequest;
 import org.example.order.order.application.model.order.request.InventoryAdjustmentTransactionChangeRequest;
 import org.example.order.order.application.model.order.request.InventoryTransactionLineItemRequest;
+import org.example.order.order.application.service.fulfillment.FulfillmentOrderWriteService;
 import org.example.order.order.application.service.orderedit.OrderCommitService;
 import org.example.order.order.application.utils.NumberUtils;
 import org.example.order.order.domain.fulfillmentorder.model.FulfillmentOrder;
 import org.example.order.order.domain.fulfillmentorder.model.FulfillmentOrderId;
 import org.example.order.order.domain.fulfillmentorder.model.FulfillmentOrderLineItem;
 import org.example.order.order.domain.fulfillmentorder.persistence.FulfillmentOrderRepository;
+import org.example.order.order.domain.order.model.OrderId;
+import org.example.order.order.domain.order.persistence.OrderRepository;
 import org.example.order.order.domain.refund.event.RefundCreatedAppEvent;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
@@ -35,8 +38,10 @@ public class FulfillmentOrderSideEffectService {
 
 
     private final FulfillmentOrderRepository fulfillmentOrderRepository;
+    private final OrderRepository orderRepository;
 
     private final ApplicationEventPublisher eventPublisher;
+
 
     public static final Comparator<FulfillmentOrder> FULFILLMENT_ORDER_COMPARATOR = Comparator
             // sort theo status, nếu close thì để xuống dưới
@@ -149,7 +154,7 @@ public class FulfillmentOrderSideEffectService {
         }
 
         if (!restockedItems.isEmpty() || !removedItems.isEmpty()) {
-            
+
         }
     }
 
@@ -288,6 +293,26 @@ public class FulfillmentOrderSideEffectService {
                             .build();
                 })
                 .toList();
+
+    }
+
+    @TransactionalEventListener(classes = {FulfillmentOrderWriteService.FulfillmentOrderMovedAppEvent.class}, phase = TransactionPhase.BEFORE_COMMIT)
+    public void handleFulfillmentOrderMoved(FulfillmentOrderWriteService.FulfillmentOrderMovedAppEvent event) {
+        log.debug("Handle fulfillment order moved: {}", event);
+
+        var originalFulfillmentOrderId = event.originalFulfillmentOrderId();
+        var originalFulfillmentOrder = fulfillmentOrderRepository.findById(originalFulfillmentOrderId)
+                .orElseThrow(NotFoundException::new);
+
+        var movedFulfillmentOrderId = event.movedFulfillmentOrderId();
+        var movedFulfillmentOrder = fulfillmentOrderRepository.findById(movedFulfillmentOrderId)
+                .orElseThrow(NotFoundException::new);
+
+        int storeId = originalFulfillmentOrderId.getStoreId();
+        int orderId = originalFulfillmentOrder.getOrderId();
+        var order = orderRepository.findById(new OrderId(storeId, orderId));
+
+        InventoryRequest inventoryRequest = null;
 
     }
 

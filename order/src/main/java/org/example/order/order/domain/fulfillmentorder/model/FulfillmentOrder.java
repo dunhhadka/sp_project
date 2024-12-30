@@ -224,6 +224,8 @@ public class FulfillmentOrder extends AggregateRoot<FulfillmentOrder> {
                 unFulfilledLineItems.add(unFulfilledLineItem);
             }
         });
+
+        return null;
     }
 
     private boolean isFulfillAndCreateNewFulfillmentOrder() {
@@ -312,6 +314,40 @@ public class FulfillmentOrder extends AggregateRoot<FulfillmentOrder> {
                                 .filter(line -> NumberUtils.isPositive(line.getRemainingQuantity()))
                                 .toList())
                 .orElse(List.of());
+    }
+
+    public FulfillmentOrder move(long newLocationId, AssignedLocation newLocation) {
+        FulfillmentOrder movedFulfillmentOrder = this;
+
+        if (FulfillmentOrderStatus.in_progress == this.status) {
+            var movedFulfillmentOrderId = new FulfillmentOrderId(this.id.getStoreId(), idGenerator.generateFulfillmentOrderId());
+            movedFulfillmentOrder = new FulfillmentOrder();
+            for (var lineItem : this.lineItems) {
+                if (lineItem.getRemainingQuantity() > 0) {
+                    movedFulfillmentOrder.addLineItem(new OrderId(this.id.getStoreId(), this.orderId),
+                            this.idGenerator.generateFulfillmentOrderLineItemId(),
+                            (long) lineItem.getInventoryItemId(),
+                            lineItem.getVariantId(),
+                            lineItem.getVariantInfo(),
+                            lineItem.getRemainingQuantity()
+                    );
+                }
+            }
+            this.closeEntry();
+        } else {
+            this.changeLocation(newLocationId, newLocation);
+        }
+
+        return movedFulfillmentOrder;
+    }
+
+    private void changeLocation(long newLocationId, AssignedLocation newLocation) {
+        this.assignedLocation = newLocation;
+        this.assignedLocationId = newLocationId;
+    }
+
+    private void closeEntry() {
+        this.status = FulfillmentOrderStatus.closed;
     }
 
     public record FulfilledResult(FulfillmentOrder fulfillmentOrder, List<FulfillmentOrderLineItem> lineItems) {

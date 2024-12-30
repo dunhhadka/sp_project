@@ -3,11 +3,7 @@ package org.example.order.order.domain.fulfillmentorder.model;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonUnwrapped;
 import jakarta.persistence.*;
-import lombok.AccessLevel;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
-import lombok.Setter;
-import org.apache.commons.lang3.tuple.Pair;
+import lombok.*;
 import org.example.order.ddd.AggregateRoot;
 import org.example.order.order.application.exception.ConstrainViolationException;
 import org.example.order.order.application.exception.UserError;
@@ -27,6 +23,8 @@ import java.util.stream.Collectors;
 
 @Entity
 @Getter
+@Builder
+@AllArgsConstructor
 @Table(name = "fulfillment_orders")
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class FulfillmentOrder extends AggregateRoot<FulfillmentOrder> {
@@ -166,221 +164,6 @@ public class FulfillmentOrder extends AggregateRoot<FulfillmentOrder> {
         }
     }
 
-    public Pair<List<FulfillmentOrderLineItem>, FulfillmentOrder> markAsFulfilled(List<FulfillmentOrderLineItemInput> lineItemInputs) {
-        var validLineItemInputs = this.mergeLine(lineItemInputs); // merge nếu 2 line có cùng id
-
-        validateFulfilledLineItems(validLineItemInputs);
-
-        var remainingLineItems = this.getRemainingLineItems();
-        var remainingLineMap = this.getRemainingLineItemMap();
-
-        List<FulfillmentOrderLineItem> fulfilledLineItems = new ArrayList<>();
-
-        if (isFulfillAllLineItems(validLineItemInputs)) {
-            remainingLineItems.forEach(line -> {
-                line.fulfillAll();
-                fulfilledLineItems.add(line);
-            });
-            removeLineItemIfEmpty();
-            this.changeStatus(FulfillmentOrderStatus.closed);
-            return Pair.of(fulfilledLineItems, null);
-        }
-
-        if (isFulfillAndCreateNewFulfillmentOrder()) {
-            return fulfillAndCreateNewFulfillmentOrder(validLineItemInputs);
-        }
-
-        lineItemInputs.forEach(line -> {
-            var lineItem = remainingLineMap.get(line.getId());
-            lineItem.fulfill(line.getQuantity());
-            fulfilledLineItems.add(lineItem);
-        });
-
-        removeLineItemIfEmpty();
-
-        if (getRemainingLineItemMap().isEmpty()) {
-            this.changeStatus(FulfillmentOrderStatus.closed);
-        }
-
-        return Pair.of(fulfilledLineItems, null);
-    }
-
-    private Pair<List<FulfillmentOrderLineItem>, FulfillmentOrder> fulfillAndCreateNewFulfillmentOrder(List<FulfillmentOrderLineItemInput> validLineItemInputs) {
-        List<FulfillmentOrderLineItem> unFulfilledLineItems = new ArrayList<>();
-        List<FulfillmentOrderLineItem> fulfilledLineItems = new ArrayList<>();
-
-        this.getRemainingLineItems().forEach(line -> {
-            var existedLine = validLineItemInputs.stream().anyMatch(l -> l.getId() == line.getId());
-            if (!existedLine) {
-                this.lineItems.remove(line);
-                unFulfilledLineItems.add(createNewLineItem(line, line.getRemainingQuantity()));
-            }
-        });
-
-        var lineItemMap = this.getRemainingLineItemMap();
-        validLineItemInputs.forEach(item -> {
-            var lineItem = lineItemMap.get(item.getId());
-            if (item.getQuantity() >= lineItem.getRemainingQuantity()) {
-                lineItem.fulfillAll();
-            } else {
-                lineItem.fulfillAndClose(item.getQuantity());
-                unFulfilledLineItems.add(createNewLineItem(lineItem, lineItem.getRemainingQuantity() - item.getQuantity()));
-            }
-            fulfilledLineItems.add(lineItem);
-        });
-
-        this.changeStatus(FulfillmentOrderStatus.closed);
-        var unFulfillOrder = createNewFulfillOrder(unFulfilledLineItems);
-        removeLineItemIfEmpty();
-
-        return Pair.of(fulfilledLineItems, unFulfillOrder);
-    }
-
-    private FulfillmentOrder createNewFulfillOrder(List<FulfillmentOrderLineItem> lineItems) {
-        if (CollectionUtils.isEmpty(lineItems)) {
-            return null;
-        }
-        var storeId = this.getId().getStoreId();
-        var orderId = new OrderId(storeId, this.orderId);
-        var fulfillmentOrder = new FulfillmentOrder(idGenerator, orderId, this.assignedLocationId, this.assignedLocation,
-                this.expectedDeliveryMethod, this.requireShipping, this.destination, this.fulfillOn);
-        lineItems.forEach(line -> fulfillmentOrder.addLineItem(orderId, line.getLineItemId(), (long) line.getInventoryItemId(),
-                line.getVariantId(), line.getVariantInfo(), line.getRemainingQuantity()));
-        return fulfillmentOrder;
-    }
-
-    private FulfillmentOrderLineItem createNewLineItem(FulfillmentOrderLineItem line, Integer quantity) {
-        return new FulfillmentOrderLineItem(idGenerator.generateFulfillmentOrderLineItemId(), this.orderId,
-                line.getLineItemId(), (long) line.getInventoryItemId(), line.getVariantId(),
-                line.getVariantInfo(), quantity);
-    }
-
-    private boolean isFulfillAndCreateNewFulfillmentOrder() {
-        return FulfillmentOrderRequestStatus.rejected == this.requestStatus
-                && FulfillmentOrderStatus.open == this.status;
-    }
-
-    private void changeStatus(FulfillmentOrderStatus fulfillmentOrderStatus) {
-        this.status = fulfillmentOrderStatus;
-    }
-
-    private void removeLineItemIfEmpty() {
-        this.lineItems.removeIf(line -> line.getRemainingQuantity() == 0 && line.getTotalQuantity() == 0);
-    }
-
-    private List<FulfillmentOrderLineItem> getRemainingLineItems() {
-        return this.lineItems.stream()
-                .filter(line -> line.getRemainingQuantity() > 0)
-                .toList();
-    }
-
-    private List<FulfillmentOrderLineItemInput> mergeLine(List<FulfillmentOrderLineItemInput> lineItemInputs) {
-        Map<Integer, FulfillmentOrderLineItemInput> result = new HashMap<>();
-        for (var line : lineItemInputs) {
-            var lineId = line.getId();
-            var lineItem = result.get(lineId);
-            if (lineItem == null) {
-                lineItem = new FulfillmentOrderLineItemInput(lineId, line.getQuantity());
-                result.put(lineId, lineItem);
-                continue;
-            }
-            lineItem.add(line.getQuantity());
-        }
-        return result.values().stream().toList();
-    }
-
-    private boolean isFulfillAllLineItems(List<FulfillmentOrderLineItemInput> lineItemInputs) {
-        if (CollectionUtils.isEmpty(lineItemInputs)) {
-            return true;
-        }
-
-        var lineItemQuantityInputMap = lineItemInputs.stream()
-                .collect(Collectors.toMap(FulfillmentOrderLineItemInput::getId, FulfillmentOrderLineItemInput::getQuantity));
-        return this.getRemainingLineItemMap().entrySet().stream()
-                .allMatch(entry -> {
-                    var lineId = entry.getKey();
-                    var lineItem = entry.getValue();
-                    return Objects.equals(lineItem.getRemainingQuantity(), lineItemQuantityInputMap.get(lineId));
-                });
-    }
-
-    private void validateFulfilledLineItems(List<FulfillmentOrderLineItemInput> lineItemInputs) {
-        if (FulfillmentOrderStatus.closed == this.status && FulfillmentOrderRequestStatus.submitted == this.requestStatus) {
-            throw new ConstrainViolationException(UserError.builder()
-                    .code("not_allowed")
-                    .fields(List.of("status", "request_status"))
-                    .message("Cannot fulfill fulfillment_order.Stats not allowed")
-                    .build());
-        }
-
-        if (CollectionUtils.isEmpty(lineItemInputs)) {
-            return;
-        }
-
-        var remainingLineItemMap = this.getRemainingLineItemMap();
-        if (remainingLineItemMap.isEmpty()) {
-            throw new ConstrainViolationException(UserError.builder()
-                    .code("not_allowed")
-                    .fields(List.of("fulfillment_order_line_item"))
-                    .message("All line_items have been fulfilled")
-                    .build());
-        }
-
-        boolean notExistLine = lineItemInputs.stream()
-                .anyMatch(line -> !remainingLineItemMap.containsKey(line.getId()));
-        if (notExistLine) {
-            throw new ConstrainViolationException(UserError.builder()
-                    .code("not_exist")
-                    .fields(List.of("fulfillment_order_line_item_id"))
-                    .message("fulfillment_order_line_item not found")
-                    .build());
-        }
-
-        boolean notFulfill = lineItemInputs.stream()
-                .anyMatch(line -> {
-                    var lineId = line.getId();
-                    var lineITem = remainingLineItemMap.get(lineId);
-                    return line.getQuantity() > lineITem.getRemainingQuantity();
-                });
-        if (notFulfill) {
-            throw new ConstrainViolationException(UserError.builder()
-                    .code("not_fulfill")
-                    .fields(List.of("quantity"))
-                    .message("can not fulfill quantity greater than remaining quantity")
-                    .build());
-        }
-    }
-
-    private Map<Integer, FulfillmentOrderLineItem> getRemainingLineItemMap() {
-        return this.lineItems.stream()
-                .collect(Collectors.toMap(FulfillmentOrderLineItem::getId, Function.identity()));
-    }
-
-    public FulfillmentOrder move(Long newLocationId, AssignedLocation newAssignLocation) {
-        if (FulfillmentOrderStatus.in_progress == this.status) {
-            var storeId = this.getId().getStoreId();
-            var orderId = new OrderId(storeId, this.getOrderId());
-            var movedFulfillmentOrder = new FulfillmentOrder(idGenerator, orderId, newLocationId,
-                    newAssignLocation, this.expectedDeliveryMethod, this.requireShipping, this.destination, this.fulfillOn);
-            this.lineItems.forEach(line -> movedFulfillmentOrder.addLineItem(orderId, line.getLineItemId(), (long) line.getInventoryItemId(),
-                    line.getVariantId(), line.getVariantInfo(), line.getRemainingQuantity()));
-            this.closeEntry();
-            return movedFulfillmentOrder;
-        }
-
-        this.changeLocationId(newLocationId, newAssignLocation);
-        return this;
-    }
-
-    private void changeLocationId(Long newLocationId, AssignedLocation newAssignLocation) {
-        this.assignedLocation = newAssignLocation;
-        this.assignedLocationId = newLocationId;
-    }
-
-    private void closeEntry() {
-        this.lineItems.forEach(FulfillmentOrderLineItem::closeEntry);
-        this.changeStatus(FulfillmentOrderStatus.closed);
-    }
 
     public void reopen() {
         this.status = FulfillmentOrderStatus.open;
@@ -390,6 +173,148 @@ public class FulfillmentOrder extends AggregateRoot<FulfillmentOrder> {
     public void partialFulfillStatus() {
         this.status = FulfillmentOrderStatus.in_progress;
         this.requestStatus = FulfillmentOrderRequestStatus.unsubmitted;
+    }
+
+    public FulfilledResult markAsFulfilled(List<FulfillmentOrderLineItemInput> lineItemInputs) {
+        validateLineInputs(lineItemInputs);
+        var validLineItemInputs = getValidInputs(lineItemInputs);
+        if (CollectionUtils.isEmpty(validLineItemInputs)) {
+            return new FulfilledResult(this, List.of());
+        }
+
+        var remainingLineItems = getRemainingLineItems();
+        List<FulfillmentOrderLineItem> fulfillmentOrderLineItems = new ArrayList<>();
+
+        if (isFulfillAllLineItem(validLineItemInputs)) {
+            remainingLineItems.forEach(lineItem -> {
+                lineItem.fulfillAll();
+                fulfillmentOrderLineItems.add(lineItem);
+            });
+            this.closeKeepQuantity();
+            return new FulfilledResult(this, fulfillmentOrderLineItems);
+        }
+
+        if (isFulfillAndCreateNewFulfillmentOrder()) {
+            return fulfillAndCreateNewFulfillmentOrder(validLineItemInputs);
+        }
+        return null;
+    }
+
+    private FulfilledResult fulfillAndCreateNewFulfillmentOrder(List<FulfillmentOrderLineItemInput> lineItemInputs) {
+        List<FulfillmentOrderLineItem> unFulfilledLineItems = new ArrayList<>();
+        List<FulfillmentOrderLineItem> fulfilledLineItems = new ArrayList<>();
+
+        this.getRemainingLineItems().stream()
+                .filter(f -> lineItemInputs.stream().noneMatch(line -> Objects.equals(line.getId(), f.getId())))
+                .forEach(line -> {
+                    this.lineItems.remove(line);
+                    unFulfilledLineItems.add(new FulfillmentOrderLineItem());
+                });
+
+        var remainingLineItemMap = getRemainingLineItemMap();
+        lineItemInputs.forEach(itemInput -> {
+            var lineItem = remainingLineItemMap.get(itemInput.getId());
+            int requestedQuantity = itemInput.getQuantity();
+
+            if (requestedQuantity >= lineItem.getRemainingQuantity()) {
+                lineItem.fulfillAll();
+            } else {
+                var unFulfilledLineItem = new FulfillmentOrderLineItem();
+                lineItem.fulfillAndClose(requestedQuantity);
+                unFulfilledLineItems.add(unFulfilledLineItem);
+            }
+        });
+    }
+
+    private boolean isFulfillAndCreateNewFulfillmentOrder() {
+        return true;
+    }
+
+    private List<FulfillmentOrderLineItemInput> getValidInputs(List<FulfillmentOrderLineItemInput> lineItemInputs) {
+        Map<Integer, FulfillmentOrderLineItemInput> results = new HashMap<>();
+        for (var input : lineItemInputs) {
+            var lineItem = results.get(input.getId());
+            if (lineItem == null) {
+                lineItem = new FulfillmentOrderLineItemInput(input.getId(), input.getQuantity());
+                results.put(lineItem.getId(), lineItem);
+                continue;
+            }
+            lineItem.add(input.getQuantity());
+            results.put(lineItem.getId(), lineItem);
+        }
+        return results.values().stream().toList();
+    }
+
+    private boolean isFulfillAllLineItem(List<FulfillmentOrderLineItemInput> lineItemInputs) {
+        var remainingLineItemMap = getRemainingLineItemMap();
+        return lineItemInputs.stream()
+                .allMatch(input -> {
+                    var lineItem = remainingLineItemMap.get(input.getId());
+                    return lineItem != null && Objects.equals(lineItem.getRemainingQuantity(), input.getQuantity());
+                });
+    }
+
+    private void validateLineInputs(List<FulfillmentOrderLineItemInput> lineItemInputs) {
+        if (this.status != FulfillmentOrderStatus.open) {
+            throw new ConstrainViolationException(UserError.builder()
+                    .message("")
+                    .fields(List.of("status"))
+                    .build());
+        }
+        if (CollectionUtils.isEmpty(lineItemInputs)) {
+            return;
+        }
+        // phải get remaining tại vì tất cả tính toán sẽ dựa trên remaining này
+        var remainingLineItems = getRemainingLineItems();
+        if (CollectionUtils.isEmpty(remainingLineItems)) {
+            throw new ConstrainViolationException(UserError.builder()
+                    .message("fulfillment order have fulfilled")
+                    .fields(List.of("fulfillment_line_items"))
+                    .build());
+        }
+
+        var remainingLineItemMap = getRemainingLineItemMap();
+        Map<Integer, Integer> remainingInputs = new HashMap<>();
+        lineItemInputs.forEach(line -> {
+            var lineItem = remainingLineItemMap.get(line.getId());
+            if (lineItem == null) {
+                throw new ConstrainViolationException(UserError.builder()
+                        .message("line_item not found")
+                        .fields(List.of("id"))
+                        .build());
+            }
+            int quantity = remainingInputs.getOrDefault(line.getId(), 0) + line.getQuantity();
+            if (quantity > lineItem.getRemainingQuantity()) {
+                throw new ConstrainViolationException(UserError.builder()
+                        .message("total quantity must be less than or equal to remaining of line")
+                        .fields(List.of("quantity"))
+                        .build());
+            }
+            remainingInputs.put(line.getId(), quantity);
+        });
+    }
+
+    private Map<Integer, FulfillmentOrderLineItem> getRemainingLineItemMap() {
+        return Optional.ofNullable(this.lineItems)
+                .map(lines ->
+                        lines.stream()
+                                .filter(line -> NumberUtils.isPositive(line.getRemainingQuantity()))
+                                .collect(Collectors.toMap(
+                                        FulfillmentOrderLineItem::getId,
+                                        Function.identity())))
+                .orElse(Map.of());
+    }
+
+    private List<FulfillmentOrderLineItem> getRemainingLineItems() {
+        return Optional.ofNullable(this.lineItems)
+                .map(lines ->
+                        lines.stream()
+                                .filter(line -> NumberUtils.isPositive(line.getRemainingQuantity()))
+                                .toList())
+                .orElse(List.of());
+    }
+
+    public record FulfilledResult(FulfillmentOrder fulfillmentOrder, List<FulfillmentOrderLineItem> lineItems) {
     }
 
     public enum ExpectedDeliveryMethod {

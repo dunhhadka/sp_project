@@ -49,8 +49,8 @@ public class RefundCreatedAppEvent {
     }
 
     public record RestockLineItem(
-            long locationId,
-            long lineItemId,
+            int locationId,
+            int lineItemId,
             int quantity,
             boolean isRemoval,
             boolean isRestock

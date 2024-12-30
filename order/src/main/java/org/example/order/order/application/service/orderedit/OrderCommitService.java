@@ -2,6 +2,7 @@ package org.example.order.order.application.service.orderedit;
 
 import kotlin.Pair;
 import lombok.RequiredArgsConstructor;
+import org.apache.commons.collections4.CollectionUtils;
 import org.example.order.SapoClient;
 import org.example.order.order.application.exception.ConstrainViolationException;
 import org.example.order.order.application.model.order.request.LocationFilter;
@@ -9,7 +10,9 @@ import org.example.order.order.domain.order.model.LineItem;
 import org.example.order.order.domain.order.model.Order;
 import org.example.order.order.domain.orderedit.model.OrderEdit;
 import org.example.order.order.domain.orderedit.model.OrderStagedChange;
+import org.example.order.order.domain.refund.model.Refund;
 import org.example.order.order.infrastructure.data.dto.Location;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -27,6 +30,8 @@ public class OrderCommitService {
     private final ChangeQuantityService changeQuantityService;
     private final TaxService taxService;
 
+    private final ApplicationEventPublisher eventPublisher;
+
     public void commit(Order order, OrderEdit orderEdit) {
         OrderEditUtils.GroupedStagedChange changes = OrderEditUtils.groupChanges(orderEdit.getStagedChanges());
 
@@ -42,7 +47,16 @@ public class OrderCommitService {
                 .toList();
         taxService.addTaxForLineItems(order, newLineItems, changedLineItems);
 
+        var refund = new Refund();
 
+        if (CollectionUtils.isNotEmpty(newLineItems) || CollectionUtils.isNotEmpty(changedLineItems)) {
+            var orderEditedAppEvent = new OrderEditedAppEvent(order, locations, newLineItems, changedLineItems);
+            eventPublisher.publishEvent(orderEditedAppEvent);
+        }
+    }
+
+    public record OrderEditedAppEvent(Order order, Map<Long, Location> locations, List<LineItem> newLineItems,
+                                      List<ChangedLineItem> changedLineItems) {
     }
 
     public record ChangedLineItem(LineItem lineItem, int delta) {

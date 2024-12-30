@@ -6,6 +6,7 @@ import org.example.order.order.application.exception.NotFoundException;
 import org.example.order.order.application.model.order.request.AdjustmentRequest;
 import org.example.order.order.application.model.order.request.InventoryAdjustmentTransactionChangeRequest;
 import org.example.order.order.application.model.order.request.InventoryTransactionLineItemRequest;
+import org.example.order.order.application.service.orderedit.OrderCommitService;
 import org.example.order.order.application.utils.NumberUtils;
 import org.example.order.order.domain.fulfillmentorder.model.FulfillmentOrder;
 import org.example.order.order.domain.fulfillmentorder.model.FulfillmentOrderId;
@@ -37,23 +38,24 @@ public class FulfillmentOrderSideEffectService {
 
     private final ApplicationEventPublisher eventPublisher;
 
-    private static final Comparator<FulfillmentOrder> _ffoRestockComparatorInstance = Comparator
-            // sort theo status, close sẽ để xuống dưới
+    public static final Comparator<FulfillmentOrder> FULFILLMENT_ORDER_COMPARATOR = Comparator
+            // sort theo status, nếu close thì để xuống dưới
             .comparing(FulfillmentOrder::getStatus, (s1, s2) -> {
                 if (s1 == s2) return 0;
                 return s1 == FulfillmentOrder.FulfillmentOrderStatus.closed ? 1 : -1;
             })
-            // sort theo assign_location_id theo thứ tự từ nhỏ đến lớn
+            // sort theo location id từ bé đến lớn
             .thenComparingLong(FulfillmentOrder::getAssignedLocationId)
-            // sort thep id, nếu status != close -> id:asc, status == close -> id:desc
+            // sort theo id, status != close => id:asc, status == close => id:desc
             .thenComparing((o1, o2) -> {
-                var compareIdResult = Long.compare(o1.getId().getId(), o2.getId().getId());
+                var idCompareResult = Long.compare(o1.getId().getId(), o2.getId().getId());
                 return o1.getStatus() != FulfillmentOrder.FulfillmentOrderStatus.closed
-                        ? compareIdResult
-                        : -compareIdResult;
+                        ? idCompareResult : -idCompareResult;
             });
 
-
+    /**
+     * - Nếu không có line_item nào được restock thì return luôn
+     */
     @EventListener(RefundCreatedAppEvent.class)
     public void handleRefundRestockEvent(RefundCreatedAppEvent event) {
         log.debug("handle order restocked fulfillment order: {}", event);
@@ -61,25 +63,24 @@ public class FulfillmentOrderSideEffectService {
             return;
         }
 
-        var storeId = event.getStoreId();
-        var orderId = event.getOrderId();
-
-        var fulfillmentOrders = fulfillmentOrderRepository.findByOrderId(storeId, (int) orderId).stream()
-                .filter(fo -> fo.getLineItems().stream().anyMatch(line -> NumberUtils.isPositive(line.getRemainingQuantity())))
-                .sorted(_ffoRestockComparatorInstance)
+        var fulfillmentOrders = fulfillmentOrderRepository.findByOrderId(event.getStoreId(), (int) event.getOrderId())
+                .stream()
+                .filter(fo -> fo.getLineItems().stream().anyMatch(item -> item.getRemainingQuantity() > 0))
+                .sorted(FULFILLMENT_ORDER_COMPARATOR)
                 .toList();
-        if (fulfillmentOrders.isEmpty()) {
+        if (CollectionUtils.isEmpty(fulfillmentOrders)) {
             return;
         }
 
         List<InventoryAdjustmentItem> restockedItems = new ArrayList<>();
         List<InventoryAdjustmentItem> removedItems = new ArrayList<>();
 
-        Map<Integer, Integer> inventoryItemMap = new HashMap<>(); // lấy inventoryItem của foLineItem, lấy inventoryItem của foLine đầu tiên
-        boolean hasRestocked = event.getRestockLineItems().stream().anyMatch(RefundCreatedAppEvent.RestockLineItem::isRestock);
+        Map<Integer, Integer> inventoryItemIdMap = new HashMap<>();
+        boolean hasRestocked = event.getRestockLineItems().stream()
+                .anyMatch(RefundCreatedAppEvent.RestockLineItem::isRestock);
         if (hasRestocked) {
-            inventoryItemMap = fulfillmentOrders.stream()
-                    .flatMap(fo -> fo.getLineItems().stream())
+            inventoryItemIdMap = fulfillmentOrders.stream()
+                    .flatMap(ffo -> ffo.getLineItems().stream())
                     .filter(foLine -> NumberUtils.isPositive(foLine.getInventoryItemId()))
                     .collect(Collectors.toMap(
                             FulfillmentOrderLineItem::getLineItemId,
@@ -87,17 +88,17 @@ public class FulfillmentOrderSideEffectService {
                             (left, right) -> left
                     ));
         }
-        // tạo event adjust inventory trước khi giảm quantity thật trong fulfillment_order
+
         for (var restockLineItem : event.getRestockLineItems()) {
-            // ignore fulfilled và no_restock
             if (restockLineItem.isRemoval() && !restockLineItem.isRestock()) {
                 continue;
             }
 
-            // nếu như có hoàn kho -> tăng available, onHand của kho hoàn
             if (restockLineItem.isRestock()) {
-                Integer inventoryItemId = inventoryItemMap.get((int) restockLineItem.lineItemId());
-                if (inventoryItemId == null) continue;
+                var inventoryItemId = inventoryItemIdMap.get(restockLineItem.lineItemId());
+                if (inventoryItemId == null) {
+                    continue;
+                }
                 restockedItems.add(new InventoryAdjustmentItem(
                         restockLineItem.lineItemId(),
                         inventoryItemId,
@@ -106,22 +107,18 @@ public class FulfillmentOrderSideEffectService {
                 ));
             }
 
-            // giảm commit, onHand của kho gốc
-            // giảm lần lượt cho các fulfillmentOrder chứa lineItem này theo thứ tự locationId từ bé đến lớn
             if (restockLineItem.isRemoval()) {
                 int remainingQuantity = restockLineItem.quantity();
                 for (var restockFulfillmentOrder : fulfillmentOrders) {
-                    if (remainingQuantity < 0) {
+                    if (remainingQuantity <= 0)
                         break;
-                    }
                     var restockFulfillmentOrderLineItem = restockFulfillmentOrder.getLineItems().stream()
-                            .filter(line -> line.getLineItemId() == restockLineItem.lineItemId() && NumberUtils.isPositive(line.getInventoryItemId()))
-                            .findFirst().orElse(null);
-                    if (restockFulfillmentOrderLineItem == null) {
+                            .filter(line -> line.getLineItemId() == restockLineItem.lineItemId())
+                            .findFirst()
+                            .orElse(null);
+                    if (restockFulfillmentOrderLineItem == null)
                         continue;
-                    }
-
-                    int quantity = Math.min(remainingQuantity, restockFulfillmentOrderLineItem.getTotalQuantity());
+                    int quantity = Math.min(remainingQuantity, restockFulfillmentOrderLineItem.getRemainingQuantity());
                     if (quantity > 0) {
                         remainingQuantity -= quantity;
                         removedItems.add(new InventoryAdjustmentItem(
@@ -135,39 +132,24 @@ public class FulfillmentOrderSideEffectService {
             }
         }
 
-        // giảm total_quantity/remaining_quantity của các item chưa fulfilled
-        Map<FulfillmentOrderId, FulfillmentOrder> updateFulfillmentOrders = new HashMap<>();
+        Map<FulfillmentOrderId, FulfillmentOrder> updatedFulfillmentOrders = new HashMap<>();
         for (var restockItem : event.getRestockLineItems()) {
-            var remainingQuantity = restockItem.quantity();
+            int remainingQuantity = restockItem.quantity();
             for (var restockFulfillmentOrder : fulfillmentOrders) {
-                if (remainingQuantity < 0) {
-                    break;
-                }
-                var quantity = restockFulfillmentOrder.restock(restockItem.lineItemId(), remainingQuantity);
+                int quantity = restockFulfillmentOrder.restock(restockItem.lineItemId(), remainingQuantity);
                 if (quantity > 0) {
                     remainingQuantity -= quantity;
-                    updateFulfillmentOrders.put(restockFulfillmentOrder.getId(), restockFulfillmentOrder);
+                    updatedFulfillmentOrders.put(restockFulfillmentOrder.getId(), restockFulfillmentOrder);
                 }
             }
         }
 
-        // đơn hàng đã close, nếu có fulfillment_order nào có status != closed -> chuyển qua closed
-        if (event.getOrder().getCancelledOn() != null) {
-            for (var ffoToCancel : fulfillmentOrders) {
-                if (ffoToCancel.getStatus() != FulfillmentOrder.FulfillmentOrderStatus.closed) {
-                    ffoToCancel.closeKeepQuantity();
-                    updateFulfillmentOrders.putIfAbsent(ffoToCancel.getId(), ffoToCancel);
-                }
-            }
-        }
-        if (!updateFulfillmentOrders.isEmpty()) {
-            for (var fulfillmentOrder : updateFulfillmentOrders.values()) {
-                fulfillmentOrderRepository.save(fulfillmentOrder);
-            }
+        if (!updatedFulfillmentOrders.isEmpty()) {
+            updatedFulfillmentOrders.values().forEach(fulfillmentOrderRepository::save);
         }
 
         if (!restockedItems.isEmpty() || !removedItems.isEmpty()) {
-            eventPublisher.publishEvent(new RefundAdjustInventoryAppEvent(event, restockedItems, removedItems));
+            
         }
     }
 
@@ -306,6 +288,11 @@ public class FulfillmentOrderSideEffectService {
                             .build();
                 })
                 .toList();
+
+    }
+
+    @EventListener(OrderCommitService.OrderEditedAppEvent.class)
+    public void handleOrderEditingEvent(OrderCommitService.OrderEditedAppEvent event) {
 
     }
 }

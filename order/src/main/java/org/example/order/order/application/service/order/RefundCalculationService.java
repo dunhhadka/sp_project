@@ -306,7 +306,7 @@ public class RefundCalculationService {
                 .setDiscountedSubtotal(subtotal);
     }
 
-    private org.apache.commons.lang3.tuple.Pair<BigDecimal, BigDecimal> categorizeLineItemDiscount(LineItem lineItem, Order order) {
+    private Pair<BigDecimal, BigDecimal> categorizeLineItemDiscount(LineItem lineItem, Order order) {
         if (CollectionUtils.isEmpty(lineItem.getDiscountAllocations()))
             return Pair.of(BigDecimal.ZERO, BigDecimal.ZERO);
 

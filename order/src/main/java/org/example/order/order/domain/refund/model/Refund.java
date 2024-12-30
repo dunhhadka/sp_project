@@ -21,7 +21,7 @@ import java.util.function.Function;
 @Getter
 @Entity
 @Table(name = "refunds")
-@NoArgsConstructor(access = AccessLevel.PROTECTED)
+@NoArgsConstructor
 public class Refund {
 
     @JsonIgnore

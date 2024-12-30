@@ -12,19 +12,19 @@ import org.example.order.order.application.model.fulfillmentorder.response.Fulfi
 import org.example.order.order.application.model.fulfillmentorder.response.LocationForMove;
 import org.example.order.order.application.model.order.context.OrderCreatedEvent;
 import org.example.order.order.application.model.order.response.OrderRoutingResponse;
+import org.example.order.order.application.service.fulfillmentorder.FulfillmentOrderHelperService;
 import org.example.order.order.domain.fulfillmentorder.model.*;
 import org.example.order.order.domain.fulfillmentorder.persistence.FulfillmentOrderRepository;
 import org.example.order.order.domain.order.model.Order;
 import org.example.order.order.domain.order.model.OrderId;
 import org.example.order.order.domain.order.persistence.OrderRepository;
+import org.example.order.order.infrastructure.data.dto.Location;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
 
 @Slf4j
 @Service
@@ -33,6 +33,9 @@ public class FulfillmentOrderWriteService {
 
     private final OrderRepository orderRepository;
     private final FulfillmentOrderRepository fulfillmentOrderRepository;
+    private final FulfillmentOrderHelperService fulfillmentOrderHelperService;
+
+    private final ApplicationEventPublisher eventPublisher;
 
     @EventListener(classes = OrderCreatedEvent.class)
     public void handleFulfillmentOrderAdded(OrderCreatedEvent event) {
@@ -166,10 +169,54 @@ public class FulfillmentOrderWriteService {
                     .build());
         }
 
-        var originalLocationId = originalFulfillmentOrder.getAssignedLocationId();
         var newLocationId = request.getNewLocationId();
 
-        List<LocationForMove>
+        List<LocationForMove> locationForMoves = fulfillmentOrderHelperService.getMovableLocations(id);
+        var locationForMove = locationForMoves.stream()
+                .filter(location -> Objects.equals((long) location.getLocation().getId(), newLocationId))
+                .findFirst()
+                .orElseThrow(() -> new ConstrainViolationException(UserError.builder()
+                        .message("can't find movable location for request")
+                        .fields(List.of("location_id"))
+                        .build()));
+        if (!locationForMove.isMovable()) {
+            throw new ConstrainViolationException(UserError.builder()
+                    .code("not_allowed")
+                    .fields(List.of("location_id"))
+                    .message(locationForMove.getMessage())
+                    .build());
+        }
+
+        Location location = findLocationById(locationForMove.getLocation().getId());
+        AssignedLocation newLocation = AssignedLocation.builder()
+                .name(location.getName())
+                .phone(location.getPhone())
+                .email(location.getEmail())
+                .address(location.getAddress())
+                .build();
+
+        var movedFulfillmentOrder = originalFulfillmentOrder.move(newLocationId, newLocation);
+        if (!Objects.equals(movedFulfillmentOrder.getAssignedLocationId(), originalFulfillmentOrder.getAssignedLocationId())) {
+            fulfillmentOrderRepository.save(movedFulfillmentOrder);
+        }
+
+        eventPublisher.publishEvent(new FulfillmentOrderMovedAppEvent(originalFulfillmentOrder.getId(), movedFulfillmentOrder.getId()));
+
+        return new FulfillmentOrderMovedResponse(originalFulfillmentOrder, movedFulfillmentOrder);
+    }
+
+    public record FulfillmentOrderMovedAppEvent(
+            FulfillmentOrderId originalFulfillmentOrderId,
+            FulfillmentOrderId movedFulfillmentOrderId
+    ) {
+    }
+
+    private boolean existingFulfillmentOrder(FulfillmentOrder originalFulfillmentOrder, Long newLocationId) {
+        return false;
+    }
+
+    private Location findLocationById(int id) {
+        return new Location();
     }
 
     private FulfillmentOrder findFFOById(FulfillmentOrderId id) {

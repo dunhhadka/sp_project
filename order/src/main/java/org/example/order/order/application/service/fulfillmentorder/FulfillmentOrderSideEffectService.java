@@ -7,7 +7,6 @@ import org.example.order.order.application.model.order.request.AdjustmentRequest
 import org.example.order.order.application.model.order.request.InventoryAdjustmentTransactionChangeRequest;
 import org.example.order.order.application.model.order.request.InventoryTransactionLineItemRequest;
 import org.example.order.order.application.service.fulfillment.FulfillmentOrderWriteService;
-import org.example.order.order.application.service.orderedit.OrderCommitService;
 import org.example.order.order.application.utils.NumberUtils;
 import org.example.order.order.domain.fulfillmentorder.model.FulfillmentOrder;
 import org.example.order.order.domain.fulfillmentorder.model.FulfillmentOrderId;
@@ -313,11 +312,6 @@ public class FulfillmentOrderSideEffectService {
         var order = orderRepository.findById(new OrderId(storeId, orderId));
 
         InventoryRequest inventoryRequest = null;
-
-    }
-
-    @EventListener(OrderCommitService.OrderEditedAppEvent.class)
-    public void handleOrderEditingEvent(OrderCommitService.OrderEditedAppEvent event) {
 
     }
 }

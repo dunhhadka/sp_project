@@ -1,5 +1,6 @@
 package org.example.order.order.application.service.orderedit;
 
+import co.elastic.clients.elasticsearch.indices.update_aliases.AddAction;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import lombok.AccessLevel;
 import lombok.NoArgsConstructor;
@@ -12,6 +13,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.function.Consumer;
+import java.util.stream.Stream;
 
 @NoArgsConstructor(access = AccessLevel.PRIVATE)
 public final class OrderEditUtils {
@@ -88,5 +90,12 @@ public final class OrderEditUtils {
             List<OrderStagedChange.DecrementItem> decrementItems,
             List<OrderStagedChange.AddItemDiscount> addItemDiscounts
     ) {
+        Stream<OrderStagedChange.QuantityAdjustmentAction> quantityAdjustmentStream() {
+            return Stream.concat(this.incrementItems.stream(), this.decrementItems.stream());
+        }
+
+        Stream<OrderStagedChange.AddLineItemAction> addActionsStream() {
+            return Stream.concat(this.addVariants.stream(), this.addCustomItems.stream());
+        }
     }
 }

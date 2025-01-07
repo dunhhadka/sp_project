@@ -2,12 +2,22 @@ package org.example.order.order.application.service.orderedit;
 
 import lombok.RequiredArgsConstructor;
 import org.example.order.order.application.model.orderedit.CalculatedOrder;
+import org.example.order.order.domain.order.model.DiscountAllocation;
+import org.example.order.order.domain.order.model.DiscountApplication;
+import org.example.order.order.domain.order.model.TaxLine;
 import org.example.order.order.domain.orderedit.model.OrderEditId;
+import org.example.order.order.domain.orderedit.model.OrderStagedChange;
 import org.example.order.order.infrastructure.data.dao.*;
 import org.example.order.order.infrastructure.data.dto.*;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.function.Function;
+import java.util.function.Predicate;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -44,9 +54,11 @@ public class OrderEditCalculatorService {
     public CalculatedOrder calculateResponse(OrderEditId editId) {
         EntityGraph entityGraph = fetchEntityGraph(editId);
 
-        EditContext context = buildEditContext(entityGraph);
+        EditContext context = buildContext(entityGraph);
 
         CalculatedOrder calculatedOrder = mapToOrderEdit(entityGraph.orderEdit.orderEdit);
+
+
 
         return calculatedOrder;
     }
@@ -66,13 +78,70 @@ public class OrderEditCalculatorService {
     }
 
 
-    private EditContext buildEditContext(EntityGraph entityGraph) {
+    private EditContext buildContext(EntityGraph entityGraph) {
         List<OrderStagedChangeDto> changes = entityGraph.orderEdit.changes;
         OrderEditUtils.GroupedStagedChange stagedChange = OrderEditUtils.groupStagedChange(changes);
 
+        // for order
+        var quantityAdjustments = stagedChange.quantityAdjustmentStream()
+                .collect(Collectors.toMap(
+                        OrderStagedChange.QuantityAdjustmentAction::getLineItemId,
+                        Function.identity()));
+
+        var allocations = entityGraph.order.discountAllocations.stream()
+                .filter(discount -> discount.getTargetType() == DiscountAllocation.TargetType.line_item)
+                .collect(Collectors.groupingBy(DiscountAllocationDto::getTargetId));
+
+        BigDecimal orderAndShippingDiscount = entityGraph.order.discountAllocations.stream()
+                .filter(isShippingDiscount().or(isOrderDiscount(entityGraph.order.discountApplications)))
+                .map(DiscountAllocationDto::getAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        var existingTaxLines = entityGraph.order.taxLines.stream()
+                .filter(taxLine -> taxLine.getTargetType() == TaxLine.TargetType.line_item)
+                .collect(Collectors.groupingBy(
+                        TaxLineDto::getTargetId,
+                        Collectors.mapping(taxLine -> taxLine, Collectors.toList())
+                ));
+
+        var refundTaxMap = entityGraph.order.refundTaxLines.stream()
+                .collect(Collectors.groupingBy(RefundTaxLineDto::getTaxLineId));
+
+        var shippingTaxes = entityGraph.order.taxLines.stream()
+                .filter(taxLine -> taxLine.getTargetType() == TaxLine.TargetType.shipping_line)
+                .collect(MergedTaxLine.toMergeMap());
+
+        // for order-edit
+        var discounts = stagedChange.addItemDiscounts().stream()
+                .collect(Collectors.groupingBy(OrderStagedChange.AddItemDiscount::getLineItemId));
+
+        var added = stagedChange.addActionsStream()
+                .collect(Collectors.toMap(
+                        OrderStagedChange.AddLineItemAction::getLineItemId,
+                        Function.identity()));
+
         return new EditContext(
-                stagedChange
+                stagedChange,
+                quantityAdjustments,
+                allocations,
+                orderAndShippingDiscount,
+                existingTaxLines,
+                refundTaxMap,
+                shippingTaxes,
+                discounts,
+                added
         );
+    }
+
+    private Predicate<DiscountAllocationDto> isOrderDiscount(List<DiscountApplicationDto> applications) {
+        return allocation -> {
+            var application = applications.get(allocation.getApplicationIndex());
+            return application.getRuleType() == DiscountApplication.RuleType.order;
+        };
+    }
+
+    private Predicate<DiscountAllocationDto> isShippingDiscount() {
+        return allocation -> allocation.getTargetType() == DiscountAllocation.TargetType.shipping_line;
     }
 
     private EntityGraph fetchEntityGraph(OrderEditId editId) {
@@ -111,7 +180,15 @@ public class OrderEditCalculatorService {
     // region record
 
     private record EditContext(
-            OrderEditUtils.GroupedStagedChange stagedChange
+            OrderEditUtils.GroupedStagedChange stagedChange,
+            Map<Integer, OrderStagedChange.QuantityAdjustmentAction> quantityAdjustments,
+            Map<Integer, List<DiscountAllocationDto>> allocations,
+            BigDecimal orderAndShippingDiscount,
+            Map<Integer, List<TaxLineDto>> existingTaxLines,
+            Map<Integer, List<RefundTaxLineDto>> refundTaxMap,
+            Map<MergedTaxLine.TaxLineKey, MergedTaxLine> shippingTaxes,
+            Map<UUID, List<OrderStagedChange.AddItemDiscount>> addedDiscountMap,
+            Map<UUID, OrderStagedChange.AddLineItemAction> addLineItemActionMap
     ) {
     }
 

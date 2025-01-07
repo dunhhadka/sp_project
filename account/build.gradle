@@ -24,11 +24,12 @@ repositories {
 }
 
 dependencies {
-    implementation 'org.springframework.boot:spring-boot-starter-data-mongodb'
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'javax.validation:validation-api:2.0.1.Final'
     implementation 'org.apache.commons:commons-lang3:3.0'
     implementation 'org.mapstruct:mapstruct:1.4.2.Final'
+    implementation 'org.springframework.data:spring-data-redis'
+    implementation group: 'redis.clients', name: 'jedis', version: '5.3.0-beta1'
     annotationProcessor 'org.mapstruct:mapstruct-processor:1.4.2.Final'
 
     compileOnly 'org.projectlombok:lombok'

@@ -1,7 +1,13 @@
 spring:
   application:
     name: account
-  data:
-    mongodb:
-      uri: mongodb+srv://hadung:XuzQu6OBCWjhYrUB@cluster0.lvkew.mongodb.net/?retryWrites=true&w=majority
-      database: accounts
+  redis-cache:
+    port: 6379
+    host: localhost
+    database: 0
+    timeout: 2000
+    enable: true
+    pool:
+      max-idle: 50
+      min-idle: 10
+      max-total: 50

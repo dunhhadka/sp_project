@@ -9,10 +9,10 @@ import org.springframework.stereotype.Service;
 @RequiredArgsConstructor
 public class OrderEditWriterService {
 
-    private final BeginOrderEditProcessor beginOrderEditProcessor;
+    private final AbstractOrderEditProcessor orderEditProcessor;
 
     @Transactional
     public OrderEditId beginEdit(int storeId, int id) {
-        return beginOrderEditProcessor.beginEdit(storeId, id);
+        return orderEditProcessor.beginEdit(storeId, id);
     }
 }

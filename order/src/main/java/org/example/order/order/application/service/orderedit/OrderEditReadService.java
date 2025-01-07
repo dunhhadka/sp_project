@@ -9,7 +9,13 @@ import org.springframework.stereotype.Service;
 @RequiredArgsConstructor
 public class OrderEditReadService {
 
-    public OrderEditResponse getBeginEdit(OrderEditId editId) {
+    private final OrderEditCalculatorService calculatorService;
 
+    public OrderEditResponse getBeginEdit(OrderEditId editId) {
+        var calculatedOrder = calculatorService.calculateResponse(editId);
+
+        return OrderEditResponse.builder()
+                .calculatedOrder(calculatedOrder)
+                .build();
     }
 }

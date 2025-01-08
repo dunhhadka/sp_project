@@ -1,7 +1,12 @@
 package org.example.order.order.application.service.orderedit;
 
+import org.example.order.order.application.model.orderedit.CalculatedLineItem;
+import org.example.order.order.application.model.orderedit.CalculatedTaxLine;
+import org.example.order.order.infrastructure.data.dto.RefundTaxLineDto;
+
 import java.math.BigDecimal;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.stream.Collector;
 
@@ -34,7 +39,20 @@ public class MergedTaxLine implements GenericTaxLine {
         );
     }
 
-    private MergedTaxLine merge(GenericTaxLine taxLine) {
+    public static Collector<? super Map<TaxLineKey, MergedTaxLine>, Map<TaxLineKey, MergedTaxLine>, List<CalculatedTaxLine>> mergerMaps() {
+        return Collector.of(
+                HashMap::new,
+                MergedTaxLine::merge,
+                MergedTaxLine::throwOnParallel,
+                map -> map.values().stream().map(MergedTaxLine::toCalculatedTax).toList()
+        );
+    }
+
+    private static CalculatedLineItem toCalculatedTax(MergedTaxLine taxLine) {
+        return null;
+    }
+
+    public MergedTaxLine merge(GenericTaxLine taxLine) {
         addPrice(taxLine.getPrice());
 
         quantity += taxLine.getQuantity();
@@ -52,6 +70,21 @@ public class MergedTaxLine implements GenericTaxLine {
         return taxLine instanceof MergedTaxLine mtl
                 ? mtl.key
                 : TaxLineKey.from(taxLine);
+    }
+
+    public MergedTaxLine mergeAll(List<RefundTaxLineDto> refundedTaxLines) {
+        for (var refund : refundedTaxLines) merge(refund);
+
+        return this;
+    }
+
+    private void merge(RefundTaxLineDto refund) {
+        addPrice(refund.getAmount().negate());
+    }
+
+    public void reduce(int amount) {
+        quantity -= amount;
+
     }
 
     public record TaxLineKey(String title, BigDecimal rate, boolean custom) {

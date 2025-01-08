@@ -1,7 +1,8 @@
 package org.example.order.order.application.service.orderedit;
 
+import com.google.common.collect.Streams;
 import lombok.RequiredArgsConstructor;
-import org.example.order.order.application.model.orderedit.CalculatedOrder;
+import org.example.order.order.application.model.orderedit.*;
 import org.example.order.order.domain.order.model.DiscountAllocation;
 import org.example.order.order.domain.order.model.DiscountApplication;
 import org.example.order.order.domain.order.model.TaxLine;
@@ -18,6 +19,7 @@ import java.util.UUID;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 @Service
 @RequiredArgsConstructor
@@ -61,8 +63,70 @@ public class OrderEditCalculatorService {
         List<BuilderSteps.BuildResult> addedResults = entityGraph.orderEdit.lineItems.stream()
                 .map(line -> buildAddedLine(line, context))
                 .toList();
+        List<CalculatedLineItem> addedLineItems = addedResults.stream().map(BuilderSteps.BuildResult::lineItem).toList();
+        calculatedOrder.setAddedLineItems(addedLineItems);
+
+        List<BuilderSteps.BuildResult> lineItemResults = entityGraph.order.lineItems.stream()
+                .map(lineItem -> buildOrderLineItem(lineItem, context))
+                .toList();
+        List<CalculatedLineItem> calculatedExistingLines = lineItemResults.stream()
+                .map(BuilderSteps.BuildResult::lineItem)
+                .toList();
+        calculatedOrder.setLineItems(calculatedExistingLines);
+
+        List<CalculatedLineItem> fulfilledLines = calculatedExistingLines.stream()
+                .filter(line -> line.getQuantity() > line.getEditableQuantity())
+                .toList();
+        calculatedOrder.setFulfilledLineItems(fulfilledLines);
+        List<CalculatedLineItem> unfulfilledLines = calculatedExistingLines.stream()
+                .filter(line -> line.getEditableQuantityBeforeChange() > 0)
+                .toList();
+        calculatedOrder.setUnfulfilledLineItems(unfulfilledLines);
+
+        List<OrderStagedChangeModel> stagedChanges = entityGraph.orderEdit.changes
+                .stream()
+                .map(OrderEditMapper::map)
+                .toList();
+        calculatedOrder.setStagedChanges(stagedChanges);
+
+        List<CalculatedDiscountApplication> discountApplications = entityGraph.orderEdit.discountApplications.stream()
+                .map(CalculatedDiscountApplication::new)
+                .toList();
+        calculatedOrder.setAddedDiscountApplication(discountApplications);
+
+        List<CalculatedTaxLine> taxLines = Streams
+                .concat(addedResults.stream().map(BuilderSteps.BuildResult::taxLines),
+                        lineItemResults.stream().map(BuilderSteps.BuildResult::taxLines),
+                        Stream.of(context.shippingTaxes))
+                .collect(MergedTaxLine.mergerMaps());
+        calculatedOrder.setTaxLines(taxLines);
 
         return calculatedOrder;
+    }
+
+    private BuilderSteps.BuildResult buildOrderLineItem(LineItemDto lineItem, EditContext context) {
+        var lineItemContext = buildLineItemContext(lineItem, context);
+        return LineItemBuilder
+                .forLineItem(lineItem, lineItemContext)
+                .build();
+    }
+
+    private LineItemBuilder.Context buildLineItemContext(LineItemDto lineItem, EditContext context) {
+        int id = lineItem.getId();
+        List<LineItemBuilder.CombinedTaxLine> existedTaxLines = context.existingTaxLines.get(id);
+        List<DiscountAllocationDto> discountAllocations = context.allocations.get(id);
+
+        OrderStagedChange.QuantityAdjustmentAction action = context.quantityAdjustments.get(id);
+        List<OrderEditTaxLineDto> addedTaxLines = context.addedTaxLineMap.get(String.valueOf(id));
+
+        return new LineItemBuilder.Context(
+                existedTaxLines,
+                discountAllocations,
+                action,
+                addedTaxLines,
+                lineItem,
+                context.isOrderDiscount
+        );
     }
 
     private BuilderSteps.BuildResult buildAddedLine(OrderEditLineItemDto line, EditContext context) {
@@ -81,7 +145,7 @@ public class OrderEditCalculatorService {
         List<OrderEditDiscountAllocationDto> discountAllocations = context.discountMap.get(lineItemId);
 
         OrderStagedChange.AddLineItemAction action = context.addLineItemActionMap.get(lineItemId);
-        List<OrderStagedChange.AddItemDiscount> addDiscount = context.stagedChange.addItemDiscounts();
+        List<OrderStagedChange.AddItemDiscount> addDiscount = context.addedDiscountMap.get(lineItemId);
 
         AddedLineItemBuilder.Changes changes = new AddedLineItemBuilder.Changes(action, addDiscount);
 
@@ -126,14 +190,16 @@ public class OrderEditCalculatorService {
                 .map(DiscountAllocationDto::getAmount)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
+        var refundTaxMap = entityGraph.order.refundTaxLines.stream()
+                .collect(Collectors.groupingBy(RefundTaxLineDto::getTaxLineId));
+
         var existingTaxLines = entityGraph.order.taxLines.stream()
                 .filter(taxLine -> taxLine.getTargetType() == TaxLine.TargetType.line_item)
                 .collect(Collectors.groupingBy(
                         TaxLineDto::getTargetId,
-                        Collectors.mapping(taxLine -> taxLine, Collectors.toList())));
-
-        var refundTaxMap = entityGraph.order.refundTaxLines.stream()
-                .collect(Collectors.groupingBy(RefundTaxLineDto::getTaxLineId));
+                        Collectors.mapping(
+                                taxLine -> new LineItemBuilder.CombinedTaxLine(taxLine, refundTaxMap.get(taxLine.getId())),
+                                Collectors.toList())));
 
         var shippingTaxes = entityGraph.order.taxLines.stream()
                 .filter(taxLine -> taxLine.getTargetType() == TaxLine.TargetType.shipping_line)
@@ -165,7 +231,8 @@ public class OrderEditCalculatorService {
                 discounts,
                 added,
                 addedTaxLineMap,
-                addedDiscountMap
+                addedDiscountMap,
+                isOrderDiscount(entityGraph.order.discountApplications)
         );
     }
 
@@ -220,13 +287,15 @@ public class OrderEditCalculatorService {
             Map<Integer, OrderStagedChange.QuantityAdjustmentAction> quantityAdjustments,
             Map<Integer, List<DiscountAllocationDto>> allocations,
             BigDecimal orderAndShippingDiscount,
-            Map<Integer, List<TaxLineDto>> existingTaxLines,
+            Map<Integer, List<LineItemBuilder.CombinedTaxLine>> existingTaxLines,
             Map<Integer, List<RefundTaxLineDto>> refundTaxMap,
             Map<MergedTaxLine.TaxLineKey, MergedTaxLine> shippingTaxes,
             Map<UUID, List<OrderStagedChange.AddItemDiscount>> addedDiscountMap,
             Map<UUID, OrderStagedChange.AddLineItemAction> addLineItemActionMap,
             Map<String, List<OrderEditTaxLineDto>> addedTaxLineMap,
-            Map<UUID, List<OrderEditDiscountAllocationDto>> discountMap) {
+            Map<UUID, List<OrderEditDiscountAllocationDto>> discountMap,
+            Predicate<DiscountAllocationDto> isOrderDiscount
+    ) {
     }
 
     private record EntityGraph(

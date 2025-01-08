@@ -2,13 +2,14 @@ package org.example.order.order.infrastructure.data.dto;
 
 import lombok.Getter;
 import lombok.Setter;
+import org.example.order.order.application.service.orderedit.GenericTaxLine;
 
 import java.math.BigDecimal;
 import java.time.Instant;
 
 @Getter
 @Setter
-public class OrderEditTaxLineDto {
+public class OrderEditTaxLineDto implements GenericTaxLine {
     private String id;
     private int storeId;
     private int editingId;

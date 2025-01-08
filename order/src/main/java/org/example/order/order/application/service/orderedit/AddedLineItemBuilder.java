@@ -8,11 +8,17 @@ import org.example.order.order.infrastructure.data.dto.OrderEditLineItemDto;
 import org.example.order.order.infrastructure.data.dto.OrderEditTaxLineDto;
 
 import java.util.List;
+import java.util.stream.Stream;
 
 public class AddedLineItemBuilder extends AbstractLineItemBuilder<AddedLineItemBuilder.Context> {
 
     public AddedLineItemBuilder(OrderEditLineItemDto lineItem, Context context) {
         super(lineItem, context);
+    }
+
+    @Override
+    protected Stream<? extends GenericTaxLine> streamTaxLines() {
+        return context().taxLines.stream();
     }
 
     public static AddedLineItemBuilder forLineItem(OrderEditLineItemDto line, Context addedContext) {

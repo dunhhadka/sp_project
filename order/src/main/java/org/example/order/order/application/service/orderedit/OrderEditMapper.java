@@ -1,7 +1,9 @@
 package org.example.order.order.application.service.orderedit;
 
+import org.bouncycastle.asn1.gm.GMObjectIdentifiers;
 import org.example.order.order.application.model.orderedit.OrderStagedChangeModel;
 import org.example.order.order.domain.orderedit.model.OrderStagedChange;
+import org.example.order.order.infrastructure.data.dto.OrderStagedChangeDto;
 
 public final class OrderEditMapper {
 
@@ -33,5 +35,25 @@ public final class OrderEditMapper {
         model.setDescription(addItemDiscount.getDescription());
         model.setValue(addItemDiscount.getValue());
         return model;
+    }
+
+    public static OrderStagedChangeModel map(OrderStagedChange.IncrementItem increment) {
+        var model = new OrderStagedChangeModel.IncrementItem();
+        model.setDelta(increment.getDelta());
+        model.setLineItemId(increment.getLineItemId());
+        model.setLocationId(increment.getLocationId());
+        return model;
+    }
+
+    public static OrderStagedChangeModel map(OrderStagedChange.DecrementItem decrement) {
+        var model = new OrderStagedChangeModel.DecrementItem();
+        model.setLineItemId(decrement.getLineItemId());
+        model.setDelta(decrement.getDelta());
+        model.setLocationId(decrement.getLocationId());
+        return model;
+    }
+
+    public static OrderStagedChangeModel map(OrderStagedChangeDto orderStagedChangeDto) {
+        return null;
     }
 }

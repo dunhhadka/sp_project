@@ -1,6 +1,5 @@
 package org.example.order.order.application.service.orderedit;
 
-import org.example.order.order.application.model.orderedit.CalculatedLineItem;
 import org.example.order.order.application.model.orderedit.CalculatedTaxLine;
 import org.example.order.order.infrastructure.data.dto.RefundTaxLineDto;
 
@@ -10,7 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collector;
 
-public class MergedTaxLine implements GenericTaxLine {
+public final class MergedTaxLine implements GenericTaxLine {
 
     private final TaxLineKey key;
     private BigDecimal price = BigDecimal.ZERO;
@@ -39,18 +38,19 @@ public class MergedTaxLine implements GenericTaxLine {
         );
     }
 
-    public static Collector<? super Map<TaxLineKey, MergedTaxLine>, Map<TaxLineKey, MergedTaxLine>, List<CalculatedTaxLine>> mergerMaps() {
+    public static Collector<Map<TaxLineKey, MergedTaxLine>, Map<TaxLineKey, MergedTaxLine>, List<CalculatedTaxLine>> mergerMaps() {
         return Collector.of(
                 HashMap::new,
                 MergedTaxLine::merge,
                 MergedTaxLine::throwOnParallel,
-                map -> map.values().stream().map(MergedTaxLine::toCalculatedTax).toList()
+                mergedMap -> mergedMap.values().stream().map(CalculatedTaxLine::new).toList()
         );
     }
 
-    private static CalculatedLineItem toCalculatedTax(MergedTaxLine taxLine) {
-        return null;
+    private static void merge(Map<TaxLineKey, MergedTaxLine> taxLineMap, Map<TaxLineKey, MergedTaxLine> taxLines) {
+        taxLines.forEach((key1, value) -> merge(taxLineMap, value));
     }
+
 
     public MergedTaxLine merge(GenericTaxLine taxLine) {
         addPrice(taxLine.getPrice());

@@ -2,6 +2,7 @@ package org.example.order.order.application.model.orderedit;
 
 import lombok.Getter;
 import lombok.Setter;
+import org.example.order.order.application.service.orderedit.MergedTaxLine;
 
 import java.math.BigDecimal;
 
@@ -13,4 +14,8 @@ public class CalculatedTaxLine {
     private BigDecimal rate;
     private BigDecimal ratePercentage;
     private boolean custom;
+
+    public CalculatedTaxLine(MergedTaxLine taxLine) {
+
+    }
 }

@@ -1,8 +1,7 @@
-package org.example.order.order.application.model.draftorder.response;
+package org.example.order.order.application.service.draftorder;
 
 import lombok.Builder;
 import lombok.Getter;
-import lombok.Setter;
 import org.example.order.order.application.model.order.context.Combo;
 import org.example.order.order.application.model.order.context.Packsize;
 import org.example.order.order.application.model.order.context.Product;
@@ -15,7 +14,6 @@ import java.util.HashMap;
 import java.util.Map;
 
 @Getter
-@Setter
 @Builder
 public class CalculateProductInfo {
     @Builder.Default
@@ -33,10 +31,10 @@ public class CalculateProductInfo {
     @Builder.Default
     private Map<Integer, TaxSettingValue> productTaxMap = new HashMap<>();
 
+    private TaxSettingValue countryTaxSetting;
+
     @Builder.Default
     private Currency currency = Currency.getInstance("VND");
-
-    private TaxSettingValue countryTaxSetting;
 
     @Builder.Default
     private BigDecimal remainderUnit = BigDecimal.ONE;

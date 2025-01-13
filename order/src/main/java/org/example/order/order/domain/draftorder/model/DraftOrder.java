@@ -148,146 +148,8 @@ public class DraftOrder extends AggregateRoot<DraftOrder> {
             this.lineItems = lineItems;
             this.lineItems.forEach(line -> line.setAggRoot(this));
             this.calculateWeight();
-            this.calculatePrice();
             this.modifiedOn = Instant.now();
         }
-    }
-
-    private void calculatePrice() {
-        if (CollectionUtils.isEmpty(this.lineItems)) {
-            return;
-        }
-
-        var currency = this.draftOrderInfo.getCurrency();
-
-        var lineItemsSubtotalPrice = this.getLineItemSubtotalPrice();
-        var totalLineItemPrice = this.getTotalLineItemPrice();
-
-        var taxSetting = getTaxSetting();
-
-        var shouldTaxLine = shouldCalculateTax(this.draftOrderInfo, taxSetting);
-        var taxShipping = taxSetting.isTaxShipping();
-        this.taxesIncluded = taxSetting.isTaxIncluded();
-
-        var taxLineDefaultValue = taxSetting.getTaxes().stream()
-                .filter(tax -> tax.getTaxType() == null && tax.getProductId() == null)
-                .findFirst().orElse(TaxSettingValue.builder().rate(BigDecimal.ZERO).build());
-        var shippingTaxValue = taxSetting.getTaxes().stream()
-                .filter(tax -> tax.getTaxType() == TaxSettingValue.TaxType.shipping)
-                .findFirst().orElse(taxLineDefaultValue);
-
-        if (this.shippingLine != null) {
-            if (shouldTaxLine && taxShipping) {
-                shippingLine.addTax(TaxLineUtils.buildTaxLine(shippingTaxValue, shippingLine.getPrice(), currency, taxesIncluded));
-            } else {
-                shippingLine.removeTax();
-            }
-        }
-
-        // discount
-        if (this.appliedDiscount != null) {
-            var amount = switch (this.appliedDiscount.getValueType()) {
-                case fixed_amount -> this.appliedDiscount.getValue();
-                case percentage -> lineItemsSubtotalPrice
-                        .multiply(this.appliedDiscount.getValue().min(BigDecimals.ONE_HUNDRED))
-                        .divide(BigDecimals.ONE_HUNDRED, currency.getDefaultFractionDigits(), RoundingMode.DOWN);
-            };
-            appliedDiscount.setAmount(amount.min(lineItemsSubtotalPrice));
-
-            // allocate discount amount
-            BigDecimal totalAllocateRatio = BigDecimal.ZERO;
-            BigDecimal totalDiscountOrder = BigDecimal.ZERO;
-            int lastIndex = this.lineItems.size() - 1;
-            for (int i = 0; i < this.lineItems.size(); i++) {
-                var lineItem = this.lineItems.get(i);
-                BigDecimal allocateRatio;
-                BigDecimal discountOrder;
-                if (i != lastIndex) {
-                    var discountedLineItem = lineItem.getDiscountedTotalPrice();
-                    allocateRatio = discountedLineItem
-                            .divide(lineItemsSubtotalPrice, currency.getDefaultFractionDigits(), RoundingMode.DOWN);
-
-                    discountOrder = discountedLineItem
-                            .multiply(this.appliedDiscount.getAmount())
-                            .divide(lineItemsSubtotalPrice, currency.getDefaultFractionDigits(), RoundingMode.HALF_UP)
-                            .min(discountedLineItem);
-
-                    totalAllocateRatio = totalAllocateRatio.add(allocateRatio);
-                    totalDiscountOrder = totalDiscountOrder.add(discountOrder);
-                } else {
-                    allocateRatio = BigDecimal.ONE.subtract(totalAllocateRatio).max(BigDecimal.ZERO);
-                    discountOrder = this.appliedDiscount.getAmount().subtract(totalDiscountOrder).max(BigDecimal.ZERO);
-                }
-
-                lineItem.addDiscount(allocateRatio, discountOrder, this.taxesIncluded);
-            }
-        }
-
-        // taxline
-        for (var lineItem : this.lineItems) {
-            switch (lineItem.getProductInfo().getType()) {
-                case normal -> {
-                    if (lineItem.getProductInfo().isTaxable() && shouldTaxLine) {
-                        var taxValue = taxSetting.getTaxes().stream()
-                                .filter(t ->
-                                        lineItem.getProductInfo().getProductId() != null
-                                                && Objects.equals(lineItem.getProductInfo().getProductId(), t.getProductId()))
-                                .findFirst().orElse(taxLineDefaultValue);
-                        var taxLine = TaxLineUtils.buildTaxLine(taxValue, lineItem.getDiscountedTotalPrice().subtract(lineItem.getDiscountOrder()), currency, taxesIncluded);
-                        lineItem.setTaxLines(List.of(taxLine), taxesIncluded);
-                    } else {
-                        lineItem.removeTaxes();
-                    }
-                }
-                case combo, packsize -> {
-                    if (!shouldTaxLine) continue;
-                    var components = lineItem.getComponents();
-                    Map<String, DraftTaxLine> taxLineMap = new HashMap<>();
-                    for (var component : components) {
-                        var taxValue = taxSetting.getTaxes().stream()
-                                .filter(t -> Objects.equals(component.getProductId(), t.getProductId()))
-                                .findFirst().orElse(taxLineDefaultValue);
-                        var taxLine = TaxLineUtils.buildTaxLine(taxValue, component.getDiscountedTotal(), currency, taxesIncluded);
-                        TaxLineUtils.merTaxLines(taxLineMap, taxLine);
-                    }
-                    lineItem.setMerTaxLines(taxLineMap.values().stream().toList());
-                }
-            }
-        }
-
-        var cartDiscountAmount = this.appliedDiscount != null ? this.appliedDiscount.getAmount() : BigDecimal.ZERO;
-        var subtotalPrice = lineItemsSubtotalPrice.subtract(cartDiscountAmount);
-        var totalShippingPrice = getTotalShippingPrice();
-        var totalLineItemDiscount = this.lineItems.stream()
-                .filter(l -> l.getAppliedDiscount() != null)
-                .map(l -> l.getAppliedDiscount().getAmount())
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-        var totalTaxLine = this.lineItems.stream()
-                .filter(l -> CollectionUtils.isNotEmpty(l.getTaxLines()))
-                .flatMap(l -> l.getTaxLines().stream())
-                .map(DraftTaxLine::getPrice)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-        //@formatter:off
-        var totalTaxShip = this.shippingLine != null
-                ? this.shippingLine.getTaxLines().stream()
-                    .map(DraftTaxLine::getPrice)
-                    .reduce(BigDecimal.ZERO, BigDecimal::add)
-                : BigDecimal.ZERO;
-        //@formatter:on
-        var totalTax = totalTaxLine.add(totalTaxShip);
-        var totalPrice = subtotalPrice
-                .add(totalTaxShip)
-                .add(taxesIncluded ? totalTaxLine : BigDecimal.ZERO);
-
-        this.pricingInfo = DraftOrderPricingInfo.builder()
-                .lineItemSubtotalPrice(lineItemsSubtotalPrice)
-                .subtotalPrice(subtotalPrice)
-                .totalDiscounts(totalLineItemDiscount.add(cartDiscountAmount))
-                .totalLineItemPrice(totalLineItemPrice)
-                .totalShippingPrice(totalShippingPrice)
-                .totalTax(totalTax)
-                .totalPrice(totalPrice)
-                .build();
     }
 
     private BigDecimal getTotalShippingPrice() {
@@ -403,7 +265,6 @@ public class DraftOrder extends AggregateRoot<DraftOrder> {
     public void setDraftOrderInfo(DraftOrderInfo draftOrderInfo) {
         if (allowEdit()) {
             this.draftOrderInfo = draftOrderInfo;
-            this.calculatePrice();
             this.modifiedOn = Instant.now();
         }
     }

@@ -12,9 +12,6 @@ import java.util.List;
 
 @Mapper(componentModel = "spring")
 public abstract class DratOrderMapper {
-    public abstract AddressHelper.AddressRequest toAddressRequest(DraftOrderAddressRequest request);
 
-    public abstract DraftOrderShippingLine toDraftOrderShippingLine(DraftShippingLineRequest request);
-
-    public abstract List<CombinationCalculateRequest.LineItem> toCombinationCalculateLine(List<DraftOrderLineItem> lineItems);
+    public abstract List<CombinationCalculateRequest.LineItem> toCombinationCalculateItemRequest(List<DraftOrderLineItem> draftLineItems);
 }

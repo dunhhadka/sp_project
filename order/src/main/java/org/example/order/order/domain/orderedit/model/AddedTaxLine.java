@@ -60,22 +60,20 @@ public class AddedTaxLine {
             boolean taxIncluded
     ) {
         this.id = id;
-        this.setTaxInfo(title, rate, lineItem, currency, taxIncluded);
-    }
 
-    private void setTaxInfo(String title, BigDecimal rate, AddedLineItem lineItem, Currency currency, boolean taxIncluded) {
         this.title = title;
         this.rate = rate;
+
         this.lineItemId = lineItem.getId().toString();
         this.quantity = lineItem.getEditableQuantity();
-        this.price = this.calculatePrice(lineItem.getEditableSubtotal(), currency, taxIncluded);
-        this.updateAt = Instant.now();
+
+        this.price = calculatePrice(taxIncluded, currency, lineItem.getEditableSubtotal());
     }
 
-    private BigDecimal calculatePrice(BigDecimal subtotal, Currency currency, boolean taxIncluded) {
-        var amount = subtotal.multiply(rate);
+    private BigDecimal calculatePrice(boolean taxIncluded, Currency currency, BigDecimal subtotal) {
+        var amount = subtotal.multiply(this.rate);
         if (taxIncluded) {
-            var ratio = BigDecimal.ONE.add(rate);
+            var ratio = BigDecimal.ONE.add(this.rate);
             amount = amount.divide(ratio, currency.getDefaultFractionDigits(), RoundingMode.CEILING);
         } else {
             amount = amount.setScale(currency.getDefaultFractionDigits(), RoundingMode.CEILING);
@@ -83,12 +81,10 @@ public class AddedTaxLine {
         return amount;
     }
 
-    public BigDecimal adjustQuantity(BigDecimal quantity, BigDecimal editableSubtotal, Currency currency, boolean taxIncluded) {
-        this.quantity = quantity;
-        BigDecimal originalPrice = this.price;
-        this.price = this.calculatePrice(editableSubtotal, currency, taxIncluded);
+    public BigDecimal updateQuantity(AddedLineItem lineItem, Currency currency, boolean taxIncluded) {
+        this.quantity = lineItem.getEditableQuantity();
+        this.price = calculatePrice(taxIncluded, currency, lineItem.getEditableSubtotal());
         this.updateAt = Instant.now();
-
-        return this.price.subtract(originalPrice);
+        return this.price;
     }
 }

@@ -3,7 +3,9 @@ package org.example.order.order.domain.orderedit.model;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.Getter;
+import lombok.Setter;
 import org.example.order.order.domain.order.model.DiscountApplication;
+import org.springframework.data.relational.core.sql.In;
 
 import javax.validation.constraints.Min;
 import javax.validation.constraints.NotNull;
@@ -18,6 +20,7 @@ import java.util.UUID;
 public class AddedDiscountApplication {
     @JsonIgnore
     @ManyToOne
+    @Setter
     @JoinColumn(name = "editing_id", referencedColumnName = "id")
     @JoinColumn(name = "store_id", referencedColumnName = "store_id")
     private OrderEdit aggRoot;
@@ -47,4 +50,12 @@ public class AddedDiscountApplication {
 
     @NotNull
     private Instant updatedAt;
+
+    public void update(String description, BigDecimal value, DiscountApplication.ValueType type) {
+        this.description = description;
+        this.value = value;
+        this.valueType = type;
+
+        this.updatedAt = Instant.now();
+    }
 }

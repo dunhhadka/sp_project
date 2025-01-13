@@ -73,8 +73,8 @@ public class AddedLineItem {
 
     public AddedLineItem(
             BigDecimal quantity,
-            int variantId,
-            int productId,
+            Integer variantId,
+            Integer productId,
             Integer locationId,
             String sku,
             String title,
@@ -86,6 +86,8 @@ public class AddedLineItem {
     ) {
         this.id = UUID.randomUUID();
 
+        this.editableQuantity = quantity;
+
         this.variantId = variantId;
         this.productId = productId;
         this.locationId = locationId;
@@ -94,52 +96,47 @@ public class AddedLineItem {
         this.title = title;
         this.variantTitle = variantTitle;
 
+        this.originalUnitPrice = price;
+        this.discountedUnitPrice = price;
+        calculatePrice();
+        applyDiscount();
+
         this.taxable = taxable;
         this.requireShipping = requiresShipping;
         this.restockable = restockable;
 
-        this.originalUnitPrice = price;
-        this.discountedUnitPrice = price;
-
-        this.editableQuantity = quantity;
-        this.calculateSubtotal();
-
         this.createdAt = Instant.now();
-        this.updatedAt = this.createdAt;
     }
 
-    private void calculateSubtotal() {
-        this.editableSubtotal = this.discountedUnitPrice
-                .multiply(this.editableQuantity);
-    }
-
-    public BigDecimal adjustQuantity(int delta) { // may be dela < 0
-        BigDecimal adjustmentQuantity = new BigDecimal(delta);
-        this.editableQuantity = this.editableQuantity.add(adjustmentQuantity);
-
-        this.calculatePrice();
-
-        return adjustmentQuantity.multiply(discountedUnitPrice);
+    private void applyDiscount() {
+        this.hasStagedDiscount = this.discountedUnitPrice.compareTo(originalUnitPrice) < 0;
     }
 
     private void calculatePrice() {
-        this.editableSubtotal = this.discountedUnitPrice.multiply(this.editableQuantity);
+        this.editableSubtotal = this.editableQuantity.multiply(this.discountedUnitPrice);
     }
 
-    public BigDecimal adjustQuantity(BigDecimal editableQuantity) {
-        BigDecimal priceBeforeChange = this.editableSubtotal;
-
-        this.editableQuantity = editableQuantity;
+    public void updateQuantity(BigDecimal quantity) {
+        this.editableQuantity = quantity;
         this.calculatePrice();
-
-        this.updatedAt = Instant.now();
-
-        return editableSubtotal.subtract(priceBeforeChange);
     }
 
     public BigDecimal getTotalDiscount() {
-        BigDecimal totalDiscountedPrice = this.discountedUnitPrice
-                .multiply(this.editableQuantity);
-        return editableSubtotal.subtract(totalDiscountedPrice);
+        BigDecimal discountAmount = this.originalUnitPrice.subtract(this.discountedUnitPrice);
+        if (discountAmount.signum() == 0) return BigDecimal.ZERO;
+        return discountAmount.multiply(editableQuantity);
+    }
+
+    public void removeDiscount() {
+        this.discountedUnitPrice = this.originalUnitPrice;
+        this.hasStagedDiscount = false;
+        this.calculatePrice();
+    }
+
+    public void applyDiscount(BigDecimal amount) {
+        this.discountedUnitPrice = this.originalUnitPrice.subtract(amount);
+        this.hasStagedDiscount = true;
+        this.calculatePrice();
+        this.updatedAt = Instant.now();
     }
 }

@@ -9,7 +9,6 @@ import org.example.order.order.infrastructure.data.dto.*;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.util.Comparator;
 import java.util.List;
 import java.util.function.Predicate;
 import java.util.stream.Stream;
@@ -22,56 +21,32 @@ public final class LineItemBuilder extends AbstractLineItemBuilder<LineItemBuild
 
     @Override
     protected Stream<? extends GenericTaxLine> streamTaxLines() {
-        return calculateTaxes();
+        return collectTaxLines();
     }
 
-    private Stream<? extends GenericTaxLine> calculateTaxes() {
+    private Stream<? extends GenericTaxLine> collectTaxLines() {
         if (!context().lineItem.isTaxable()) {
             return Stream.empty();
         }
 
         var action = context().action;
         if (action == null) {
-            return exitingTaxLines();
+            return existingTaxLines();
         }
         if (action instanceof OrderStagedChange.IncrementItem) {
-            return Stream.concat(exitingTaxLines(), context().addedTaxLines.stream());
+            return Stream.concat(existingTaxLines(), context().addedTaxLines.stream());
         }
 
-        OrderStagedChange.DecrementItem decrement = (OrderStagedChange.DecrementItem) context().action;
-        int[] amount = {decrement.getDelta()};
-
-        return context().taxLines
-                .stream()
-                .sorted(Comparator.<CombinedTaxLine>
-                                comparingInt(combined -> combined.taxLine.getId())
-                        .reversed()
-                )
-                .map(combined -> new MergedTaxLine(MergedTaxLine.TaxLineKey.from(combined.taxLine))
-                        .merge(combined.taxLine)
-                        .mergeAll(combined.refundedTaxLines)
-                )
-                .dropWhile(tax -> {
-                    amount[0] -= tryReduce(tax, amount[0]);
-                    return tax.getQuantity() <= 0;
-                });
+        OrderStagedChange.DecrementItem decrement = (OrderStagedChange.DecrementItem) action;
+        int delta = decrement.getDelta();
+        return null;
     }
 
-    private int tryReduce(MergedTaxLine tax, int amount) {
-        int reducible = tax.getQuantity();
-        if (amount <= reducible) {
-            tax.reduce(amount);
-            return amount;
-        }
-        return 0;
-    }
-
-    private Stream<? extends GenericTaxLine> exitingTaxLines() {
+    private Stream<? extends GenericTaxLine> existingTaxLines() {
         return context().taxLines.stream()
-                .map(combined ->
-                        new MergedTaxLine(MergedTaxLine.TaxLineKey.from(combined.taxLine))
-                                .merge(combined.taxLine)
-                                .mergeAll(combined.refundedTaxLines));
+                .map(combined -> new MergedTaxLine(MergedTaxLine.TaxLineKey.from(combined.taxLine()))
+                        .merge(combined.taxLine)
+                        .mergeAll(combined.refundedTaxLines));
     }
 
     public static LineItemBuilder forLineItem(LineItemDto lineItem, Context context) {
@@ -97,35 +72,34 @@ public final class LineItemBuilder extends AbstractLineItemBuilder<LineItemBuild
     protected void doBuild() {
         var action = context().action;
         if (action != null) {
+            // add action to staged changes
             addChange(action);
+            // apply change quantity
             adjustQuantity(action);
         } else {
-            disallowQuantityAdjustment();
+            disallowAdjustQuantity();
         }
 
         applyDiscount();
     }
 
     private void applyDiscount() {
-        lineItem().setCalculatedDiscountAllocations(
-                context().discountAllocations.stream().map(CalculatedDiscountAllocation::new).toList());
-
-        lineItem().setDiscountedUnitPrice(context().lineItem.getDiscountUnitPrice());
-
         BigDecimal quantity = BigDecimal.valueOf(lineItem().getQuantity());
         BigDecimal editableQuantity = BigDecimal.valueOf(lineItem().getEditableQuantity());
 
         BigDecimal totalPriceAfterDiscounted = lineItem().getOriginalUnitPrice().multiply(quantity);
-
         if (context().hasAnyDiscount()) {
             assert context().action == null : "Line item has discount, no quantity adjustment should be present";
 
-            BigDecimal totalDiscount = context().discountAllocations.stream()
-                    .filter(context().isOrderDiscount.negate())
+            lineItem().setCalculatedDiscountAllocations(
+                    context().discountAllocations.stream()
+                            .map(CalculatedDiscountAllocation::new)
+                            .toList());
+
+            BigDecimal totalDiscountPrice = context().discountAllocations.stream()
                     .map(DiscountAllocationDto::getAmount)
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
-
-            totalPriceAfterDiscounted = totalPriceAfterDiscounted.subtract(totalDiscount);
+            totalPriceAfterDiscounted = totalPriceAfterDiscounted.subtract(totalDiscountPrice);
         }
 
         if (quantity.compareTo(BigDecimal.ZERO) > 0) {
@@ -137,19 +111,21 @@ public final class LineItemBuilder extends AbstractLineItemBuilder<LineItemBuild
             lineItem().setEditableSubtotal(BigDecimal.ZERO);
         }
 
+        lineItem().setDiscountedUnitPrice(context().lineItem.getDiscountUnitPrice());
+
         lineItem().setUneditableSubtotal(totalPriceAfterDiscounted.subtract(lineItem().getEditableSubtotal()));
     }
 
     private void adjustQuantity(OrderStagedChange.QuantityAdjustmentAction action) {
         if (context().hasAnyDiscount()) {
-            Preconditions.checkArgument(action == null || action.getDelta() == context().lineItem.getQuantity(),
-                    "Cannot adjust quantity of line items with discounts");
-            disallowQuantityAdjustment();
+            Preconditions.checkArgument(action == null || action.getDelta() == context().lineItem.getFulfillableQuantity(),
+                    "Cannot adjust quantity of line item with discounts");
+            disallowAdjustQuantity();
             return;
         }
 
-        int editableQuantity = context().lineItem.getFulfillableQuantity();
         int quantity = context().lineItem.getQuantity();
+        int editableQuantity = context().lineItem.getFulfillableQuantity();
         int delta = action.getDelta();
 
         int newQuantity;
@@ -158,25 +134,26 @@ public final class LineItemBuilder extends AbstractLineItemBuilder<LineItemBuild
         if (action instanceof OrderStagedChange.IncrementItem) {
             newQuantity = quantity + delta;
             newEditableQuantity = editableQuantity + delta;
-        } else if (action instanceof OrderStagedChange.DecrementItem di) {
-            Verify.verify(editableQuantity >= delta);
+        } else if (action instanceof OrderStagedChange.DecrementItem decrement) {
+            Verify.verify(delta <= editableQuantity);
+
             newQuantity = quantity - delta;
             newEditableQuantity = editableQuantity - delta;
-            lineItem().setRestocking(di.isRestock());
-        } else throw new IllegalStateException("Unknown implementation of QuantityAdjustmentAction");
+
+            lineItem().setRestocking(decrement.isRestock());
+        } else throw new IllegalArgumentException("Unknown implementation for QuantityAdjustmentAction");
 
         lineItem().setQuantity(newQuantity);
         lineItem().setEditableQuantity(newEditableQuantity);
         lineItem().setEditableQuantityBeforeChange(editableQuantity);
     }
 
-    private void disallowQuantityAdjustment() {
-        int quantity = context().lineItem.getCurrentQuantity();
+    private void disallowAdjustQuantity() {
+        int quantity = context().lineItem.getQuantity();
         int editableQuantity = context().lineItem.getFulfillableQuantity();
 
         lineItem().setQuantity(quantity);
         lineItem().setEditableQuantity(editableQuantity);
         lineItem().setEditableQuantityBeforeChange(editableQuantity);
     }
-
 }

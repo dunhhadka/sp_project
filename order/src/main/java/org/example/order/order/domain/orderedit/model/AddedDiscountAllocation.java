@@ -3,6 +3,7 @@ package org.example.order.order.domain.orderedit.model;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.Getter;
+import lombok.Setter;
 
 import javax.validation.constraints.NotNull;
 import java.math.BigDecimal;
@@ -15,6 +16,7 @@ import java.util.UUID;
 public class AddedDiscountAllocation {
     @JsonIgnore
     @ManyToOne
+    @Setter
     @JoinColumn(name = "editing_id", referencedColumnName = "id")
     @JoinColumn(name = "store_id", referencedColumnName = "store_id")
     private OrderEdit aggRoot;
@@ -33,8 +35,10 @@ public class AddedDiscountAllocation {
     @NotNull
     private Instant updatedAt;
 
-    public void adjustAmount(BigDecimal discountAmount) {
-        this.allocatedAmount = discountAmount;
+    public BigDecimal updateAmount(BigDecimal allocatedDiscountAmount) {
+        BigDecimal originalAmount = this.allocatedAmount;
+        this.allocatedAmount = allocatedDiscountAmount;
         this.updatedAt = Instant.now();
+        return allocatedDiscountAmount.subtract(originalAmount);
     }
 }

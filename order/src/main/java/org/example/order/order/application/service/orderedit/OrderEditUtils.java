@@ -1,20 +1,27 @@
 package org.example.order.order.application.service.orderedit;
 
-import co.elastic.clients.elasticsearch.indices.update_aliases.AddAction;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import lombok.AccessLevel;
 import lombok.NoArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.tuple.Pair;
+import org.example.order.order.application.exception.ConstrainViolationException;
+import org.example.order.order.application.exception.UserError;
 import org.example.order.order.application.utils.JsonUtils;
+import org.example.order.order.domain.order.model.BillingAddress;
+import org.example.order.order.domain.order.model.MailingAddress;
+import org.example.order.order.domain.order.model.Order;
+import org.example.order.order.domain.order.model.ShippingAddress;
 import org.example.order.order.domain.orderedit.model.OrderStagedChange;
 import org.example.order.order.infrastructure.data.dto.OrderStagedChangeDto;
 import org.springframework.util.CollectionUtils;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
+import java.util.*;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
+@Slf4j
 @NoArgsConstructor(access = AccessLevel.PRIVATE)
 public final class OrderEditUtils {
 
@@ -81,6 +88,34 @@ public final class OrderEditUtils {
         } catch (JsonProcessingException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    public static String resolveOrderCountryCode(Order order) {
+        return Optional.ofNullable(order.getBillingAddress())
+                .map(BillingAddress::getAddressInfo)
+                .or(() -> Optional.ofNullable(order.getShippingAddress())
+                        .map(ShippingAddress::getAddressInfo))
+                .map(MailingAddress::getCountryCode)
+                .orElse("VND");
+    }
+
+    public static Pair<UUID, Integer> parseLineItemId(String lineItemIdString) {
+        try {
+            if (StringUtils.isNotBlank(lineItemIdString)) {
+                if (lineItemIdString.contains("-")) {
+                    UUID lineItemId = UUID.fromString(lineItemIdString);
+                    return Pair.of(lineItemId, null);
+                } else {
+                    int lineItemId = Integer.parseInt(lineItemIdString);
+                    return Pair.of(null, lineItemId);
+                }
+            }
+        } catch (Exception ignored) {
+            log.error("invalid line item id");
+        }
+        throw new ConstrainViolationException(UserError.builder()
+                .message("line item id is invalid")
+                .build());
     }
 
     public record GroupedStagedChange(

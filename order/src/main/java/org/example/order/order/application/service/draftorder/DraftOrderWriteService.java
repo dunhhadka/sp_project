@@ -25,10 +25,7 @@ import org.example.order.order.infrastructure.data.dto.VariantDto;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
-import java.util.ArrayList;
-import java.util.Currency;
-import java.util.List;
-import java.util.Objects;
+import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -86,23 +83,22 @@ public class DraftOrderWriteService {
         draftOrder.setDraftOrderInfo(draftOrderInfoBuilder.build());
 
         if (CollectionUtils.isNotEmpty(request.getLineItems())) {
-            this.handleCombinations(storeId, draftOrder);
+            handleCombinations(storeId, draftOrder);
         }
     }
 
     private void handleCombinations(Integer storeId, DraftOrder draftOrder) {
         var draftLineItems = draftOrder.getLineItems();
         var currency = draftOrder.getDraftOrderInfo().getCurrency();
-        if (draftLineItems.stream().anyMatch(line -> line.getProductInfo().getType() != VariantType.normal)) {
-            var errors = new ArrayList<UserError>();
-
+        // chỉ tính toán lại khi chứa line combo/packsize
+        if (draftLineItems.stream().anyMatch(item -> item.getProductInfo().getType() != VariantType.normal)) {
+            var errors = new HashMap<String, String>();
             var combinationCalculateRequest = CombinationCalculateRequest.builder()
                     .calculateTax(false)
-                    .updateProductInfo(true)
+                    .updateProductInfo(true) // update luôn cả product ??
                     .currency(currency.getCurrencyCode())
-                    .lineItems(dratOrderMapper.toCombinationCalculateLine(draftLineItems))
+                    .lineItems(dratOrderMapper.toCombinationCalculateItemRequest(draftLineItems))
                     .build();
-
             var calculateResponse = combinationCalculateService.calculate(storeId, combinationCalculateRequest);
         }
     }

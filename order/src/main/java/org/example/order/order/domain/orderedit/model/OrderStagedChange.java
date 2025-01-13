@@ -175,13 +175,11 @@ public class OrderStagedChange {
         @Positive
         private int lineItemId;
         private int delta;
-        private Integer locationId;
 
-        public IncrementItem(int lineItemId, int delta, Integer locationId) {
+        public IncrementItem(int lineItemId, int delta) {
             this();
             this.lineItemId = lineItemId;
             this.delta = delta;
-            this.locationId = locationId;
         }
 
         public IncrementItem() {
@@ -200,14 +198,12 @@ public class OrderStagedChange {
         @Positive
         private int lineItemId;
         private int delta;
-        private Integer locationId;
         private boolean restock;
 
-        public DecrementItem(int lineItemId, int delta, Integer locationId, boolean restock) {
+        public DecrementItem(int lineItemId, int delta, boolean restock) {
             this();
             this.lineItemId = lineItemId;
             this.delta = delta;
-            this.locationId = locationId;
             this.restock = restock;
         }
 
@@ -222,6 +218,7 @@ public class OrderStagedChange {
 
     @Getter
     @Setter
+    @Builder(toBuilder = true)
     public static class AddItemDiscount extends BaseAction {
         private @NotNull UUID lineItemId;
         private String description;

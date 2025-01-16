@@ -3,6 +3,7 @@ package org.example.order.order.application.service.draftorder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections4.CollectionUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.example.order.SapoClient;
 import org.example.order.order.application.exception.ConstrainViolationException;
 import org.example.order.order.application.exception.ErrorMessage;
@@ -36,7 +37,7 @@ public class CombinationCalculateService {
         var productInfo = getProductInfo(storeId, request);
 
         CombinationCalculateResponse result;
-        if (request.isUpdateProductInfo()) { // update product
+        if (request.isUpdateProductInfo()) {
             result = calculate(request, productInfo);
         } else {
             result = calculateWithoutUpdateProductInfo(request, productInfo);
@@ -44,358 +45,337 @@ public class CombinationCalculateService {
         return result;
     }
 
-    private CombinationCalculateResponse calculateWithoutUpdateProductInfo(CombinationCalculateRequest request, CalculateProductInfo productInfo) {
-        var lineItems = new ArrayList<CombinationCalculateResponse.LineItem>();
-        for (var lineItem : request.getLineItems()) {
-            var lineItemResponse = combinationMapper.toResponse(lineItem);
-            var components = lineItemResponse.getComponents();
-            if (CollectionUtils.isNotEmpty(components)) {
-                var lineItemPrice = lineItemResponse.getLinePrice();
-                var minQuantity = components.stream()
-                        .map(CombinationCalculateResponse.LineItemComponent::getQuantity)
-                        .min(Comparator.naturalOrder())
-                        .orElse(productInfo.getRemainderUnit());
-                for (var component : components) {
-                    component.setSubtotal(component.getLinePrice());
-                }
-                var canBeOddComponent = components.stream()
-                        .filter(CombinationCalculateResponse.LineItemComponent::isCanBeOdd)
-                        .findFirst()
-                        .orElse(components.get(0));
-                var sortedComponents = components.stream()
-                        .sorted(Comparator.comparing(CombinationCalculateResponse.LineItemComponent::getRemainder).reversed())
-                        .toList();
-                handleDiscountAllocations(canBeOddComponent, components, sortedComponents, lineItemResponse.getDiscountAllocations(), lineItemPrice, minQuantity, productInfo);
-            }
-            if (request.isCalculateTax()) {
-                handleTaxLines(lineItemResponse, productInfo.getCountryTaxSetting(), productInfo.getCurrency(), request.isTaxIncluded(), request.isTaxExempt(), productInfo);
-            }
-            lineItems.add(lineItemResponse);
-        }
-        return CombinationCalculateResponse.builder()
-                .lineItems(lineItems)
-                .build();
-    }
-
-    private void handleTaxLines(CombinationCalculateResponse.LineItem lineItem, TaxSettingValue countryTaxSetting, Currency currency, boolean taxIncluded, boolean isTaxExempt, CalculateProductInfo productInfo) {
-        List<CombinationCalculateResponse.ComboPacksizeTaxLine> taxLines = new ArrayList<>();
-        Map<String, CombinationCalculateResponse.ComboPacksizeTaxLine> taxLineMap = new HashMap<>();
-        var isCustomTax = CollectionUtils.isNotEmpty(lineItem.getTaxLines());
-        if (isCustomTax) {
-            // Merge rồi chia thuế về các line thành phần
-            lineItem.setTaxLines(taxLines);
-        }
-        switch (lineItem.getType()) {
-            case packsize, combo -> {
-                var components = lineItem.getComponents();
-                if (isCustomTax) {
-                    var count = components.size();
-                    for (CombinationCalculateResponse.ComboPacksizeTaxLine taxLine : taxLines) {
-                        var appliedTax = BigDecimal.ZERO;
-                        for (int i = 0; i < count; i++) {
-                            var component = components.get(i);
-                            if (i < count - 1) {
-//                                var price = TaxUtils.distribute(taxLine.getPrice(), lineItem.getLinePrice(), component.getLinePrice(), currency);
-                                var price = BigDecimal.ZERO;
-                                appliedTax = appliedTax.add(price);
-                                var customTaxLine = CombinationCalculateResponse.ComboPacksizeTaxLine.builder()
-                                        .rate(taxLine.getRate())
-                                        .title(taxLine.getTitle())
-                                        .price(price)
-                                        .build();
-                                component.addTaxLine(customTaxLine);
-                                continue;
-                            }
-                            component.addTaxLine(CombinationCalculateResponse.ComboPacksizeTaxLine.builder()
-                                    .rate(taxLine.getRate())
-                                    .title(taxLine.getTitle())
-                                    .price(taxLine.getPrice().subtract(appliedTax))
-                                    .build());
-                        }
-                    }
-                } else if (!isTaxExempt) {
-                    for (CombinationCalculateResponse.LineItemComponent component : components) {
-                        if (!component.isTaxable()) continue;
-                        var productTax = productInfo.getProductTaxMap().get((int) component.getProductId());
-//                        var taxLine = TaxUtils.buildTaxLine(productTax, countryTax, component.getSubtotalPrice(), currency, taxesIncluded);
-                        CombinationCalculateResponse.ComboPacksizeTaxLine taxLine = null;
-                        List<CombinationCalculateResponse.ComboPacksizeTaxLine> componentTaxLines = new ArrayList<>();
-                        componentTaxLines.add(taxLine);
-                        component.setTaxLines(componentTaxLines);
-//                        TaxUtils.merge(taxLineMap, taxLine);
-                    }
-                    lineItem.setTaxLines(taxLineMap.values().stream().toList());
-                }
-            }
-            case normal -> {
-                if (!isCustomTax && !isTaxExempt && lineItem.isTaxable()) {
-//                    var productTax = NumberUtils.isPositive(lineItem.getProductId()) ? productInfo.productTaxMap.get(lineItem.getProductId().intValue()) : null;
-//                    taxLines.add(TaxUtils.buildTaxLine(productTax, countryTax, lineItem.getSubtotalPrice(), currency, taxesIncluded));
-                    lineItem.setTaxLines(taxLines);
-                }
-            }
-        }
-    }
-
     private CombinationCalculateResponse calculate(CombinationCalculateRequest request, CalculateProductInfo productInfo) {
-        var lineItemRequests = request.getLineItems();
         var variantMap = productInfo.getVariantMap();
         var productMap = productInfo.getProductMap();
         var packsizeMap = productInfo.getPacksizeMap();
         var currency = productInfo.getCurrency();
-        var isCalculateTax = request.isCalculateTax();
 
         List<CombinationCalculateResponse.LineItem> lineResponses = new ArrayList<>();
-        for (var lineItemRequest : lineItemRequests) {
-            var lineItemQuantity = lineItemRequest.getQuantity();
-            var discountAllocations = lineItemRequest.getDiscountAllocations();
-            // Giá của line sản phẩm gôc
-            var lineItemPrice = lineItemRequest.getLinePrice();
+        for (var lineItemRequest : request.getLineItems()) {
+            BigDecimal lineItemQuantity = lineItemRequest.getQuantity();
+            BigDecimal lineItemPrice; // Giá của line gốc
+
             if (lineItemRequest.getVariantId() == null) {
                 var customLineItem = combinationMapper.toResponse(lineItemRequest);
-                lineItemPrice = customLineItem.getQuantity().multiply(customLineItem.getPrice());
+                lineItemPrice = customLineItem.getPrice().multiply(lineItemQuantity);
                 customLineItem.setLinePrice(lineItemPrice);
                 lineResponses.add(customLineItem);
                 continue;
             }
+
             var variant = variantMap.get(lineItemRequest.getVariantId());
             if (variant == null) {
                 throw new ConstrainViolationException(UserError.builder()
-                        .code("variant_id")
-                        .message("variant_id = %s is not exist".formatted(lineItemRequest.getVariantId()))
                         .fields(List.of("variant_id"))
                         .build());
             }
-            var product = productMap.get(variant.getProductId());
+            var product = productMap.get(lineItemRequest.getProductId());
             var lineItem = combinationMapper.toResponse(lineItemRequest, variant, product);
+            lineResponses.add(lineItem);
 
-            //Note: Nếu có cả variantId và cả price thì ưu tin lấy giá trị truyền vào
-            if (lineItemRequest.getPrice() != null && lineItemRequest.getPrice().compareTo(BigDecimal.ZERO) > -1) {
+            //Note: Nếu truyền cả variantId và price thì ưu tiên lấy price hơn
+            if (lineItemRequest.getPrice() != null && lineItemRequest.getPrice().compareTo(BigDecimal.ZERO) >= 0) {
                 lineItem.setPrice(lineItemRequest.getPrice());
-                lineItemPrice = lineItemQuantity.multiply(lineItemRequest.getPrice());
+                lineItemPrice = lineItemRequest.getPrice().multiply(lineItemQuantity);
             } else {
-                lineItemPrice = lineItemQuantity.multiply(variant.getPrice());
+                lineItemPrice = variant.getPrice().multiply(lineItemQuantity);
             }
             lineItem.setLinePrice(lineItemPrice);
 
-            // build lại các thành phần component của lineItem
-            switch (variant.getType()) {
+            // tuỳ theo loại sản phẩm sẽ phân bổ giá khác nhau
+            switch (lineItemRequest.getType()) {
                 case packsize -> {
-                    var packsize = packsizeMap.get(variant.getId());
+                    var packsize = packsizeMap.get(lineItemRequest.getVariantId());
                     var childProduct = productMap.get(packsize.getProductId());
                     var childVariant = variantMap.get(packsize.getVariantId());
-                    if (childVariant == null) {
-                        log.debug("Packsize variant not found");
+                    if (childVariant == null) { //Có trường hợp nào null không ??
                         lineItem.setComponents(List.of());
-                        lineResponses.add(lineItem);
                         continue;
                     }
-                    // Tổng số quantity của packsize: VD. 1 packsize A có 15 quantity => 1 line có 15 quantity
-                    var quantity = packsize.getQuantity().multiply(lineItemQuantity);
-                    var componentPrice = lineItemPrice.divide(quantity, currency.getDefaultFractionDigits(), RoundingMode.FLOOR);
-                    // phần dư sau khi chia
-                    var remainder = lineItemPrice.subtract(componentPrice.multiply(quantity));
+
+                    var baseQuantity = packsize.getQuantity();
+                    var quantity = baseQuantity.multiply(lineItemQuantity);
+                    // Giá của 1 quantity trong packsize
+                    var itemUnitPrice = lineItemPrice.divide(quantity, currency.getDefaultFractionDigits(), RoundingMode.FLOOR); // Làm tròn xuống
+                    // Phần dư
+                    var remainder = lineItemPrice.subtract(itemUnitPrice.multiply(quantity));
                     var component = combinationMapper.toResponse(
                             childVariant,
                             childProduct,
-                            quantity,
-                            packsize.getQuantity(),
-                            remainder,
-                            componentPrice,
-                            lineItemPrice,
+                            quantity, // Tổng quantity trong đơn hàng
+                            baseQuantity, // Quantity trong 1 packsize
+                            remainder, // Phần dư khi chia
+                            itemUnitPrice, // Giá của 1 quantity
+                            lineItemPrice, // Tổng giá của lineItem
                             lineItemRequest.getDiscountAllocations(),
                             VariantType.packsize
                     );
-                    component.setBaseQuantity(packsize.getQuantity());
+                    component.setBaseQuantity(baseQuantity);
                     if (NumberUtils.isPositive(remainder)) component.setCanBeOdd(true);
                     lineItem.setComponents(List.of(component));
-                    lineItem.setItemUnit(childVariant.getUnit());
                 }
                 case combo -> {
-                    var components = buildComboComponents(variant, lineItemQuantity, lineItemPrice, discountAllocations, productInfo);
+                    var components = buildComponents(lineItemQuantity, lineItemPrice, variant, productInfo, lineItemRequest.getDiscountAllocations());
                     lineItem.setComponents(components);
                 }
                 case normal -> {
-                    //NOTE: Giữ nguyên
+                    //Note: Giữ nguyên như cũ
                 }
-                default -> throw new IllegalArgumentException();
             }
         }
-
+        if (request.isCalculateTax()) {
+            var countryTax = productInfo.getCountryTaxSetting();
+            for (var lineItem : lineResponses) {
+                handleTaxLines(lineItem, countryTax, currency, request.isTaxIncluded(), request.isTaxExempt(), productInfo);
+            }
+        }
         return CombinationCalculateResponse.builder()
                 .lineItems(lineResponses)
                 .build();
     }
 
-    private List<CombinationCalculateResponse.LineItemComponent> buildComboComponents(
-            ProductVariant variant,
-            BigDecimal lineItemQuantity,
-            BigDecimal lineItemPrice,
-            List<CombinationCalculateResponse.ComboPacksizeDiscountAllocation> discountAllocations,
+    private void handleTaxLines(
+            CombinationCalculateResponse.LineItem lineItem,
+            TaxSettingValue countryTax,
+            Currency currency,
+            boolean taxIncluded,
+            boolean taxExempt,
             CalculateProductInfo productInfo
     ) {
+        Map<MergedTaxLine.TaxLineKey, MergedTaxLine> taxLineMap = new HashMap<>();
+        var isCustomTax = CollectionUtils.isNotEmpty(lineItem.getTaxLines());
+        if (isCustomTax) {
+            taxLineMap = lineItem.getTaxLines().stream()
+                    .collect(MergedTaxLine.merge()); // set lại taxLine sao không trùng key
+        }
+        switch (lineItem.getType()) {
+            case combo, packsize -> {
+                var components = lineItem.getComponents();
+                if (isCustomTax) { // Nếu có taxLine từ request
+                    int componentCount = components.size();
+                    var taxLines = taxLineMap.values().stream().toList();
+                    for (var taxLine : taxLines) {
+                        var appliedAmount = BigDecimal.ZERO;
+                        for (int i = 0; i < componentCount; i++) {
+                            var component = components.get(i);
+                            BigDecimal price;
+                            if (i != componentCount - 1) {
+                                price = MergedTaxLine.distribute(taxLine, component.getLinePrice(), lineItem.getLinePrice(), currency);
+                                appliedAmount = appliedAmount.add(price);
+                                // set lại taxLine cho line thành phần
+                            } else {
+                                price = taxLine.getPrice().subtract(appliedAmount);
+                            }
+                            var componentTaxLine = new CombinationCalculateResponse.ComboPacksizeTaxLine(taxLine).toBuilder()
+                                    .price(price)
+                                    .build();
+                            component.addTaxLine(componentTaxLine);
+                        }
+                    }
+                } else if (!taxExempt) {
+                    for (var component : components) {
+                        if (!component.isTaxable()) continue;
+                        var productTax = productInfo.getProductTaxMap().get(component.getProductId());
+                        var taxLine = MergedTaxLine.buildComboPacksizeTaxLine(productTax, countryTax, component.getSubtotal(), taxIncluded, currency);
+                        component.setTaxLines(List.of(taxLine));
+                        MergedTaxLine.merge(taxLineMap, taxLine);
+                    }
+                }
+
+                var finalTaxLines = MergedTaxLine.toValue(taxLineMap).values().stream().toList();
+                lineItem.setTaxLines(finalTaxLines);
+            }
+            case normal -> {
+                // NOTE: Giữ nguyên như cũ
+            }
+        }
+    }
+
+    private List<CombinationCalculateResponse.LineItemComponent> buildComponents(
+            BigDecimal lineItemQuantity,
+            BigDecimal lineItemPrice,
+            ProductVariant variant,
+            CalculateProductInfo productInfo,
+            List<CombinationCalculateResponse.ComboPacksizeDiscountAllocation> discountAllocations) {
         var combo = productInfo.getComboMap().get(variant.getId());
+        if (combo == null) {
+            throw new ConstrainViolationException(UserError.builder()
+                    .fields(List.of("variant_id", "combo"))
+                    .build());
+        }
         var comboItems = combo.getComboItems();
-        if (CollectionUtils.isEmpty(comboItems)) return new ArrayList<>();
-
-        // giá gốc của combo
+        if (CollectionUtils.isEmpty(comboItems)) return List.of();
         var originalComboPrice = comboItems.stream()
-                .map(item -> item.getPrice().multiply(item.getPrice()))
+                .map(item -> item.getPrice().multiply(item.getQuantity()))
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
-        // Tách thành 2 loại: item có price > 0 và item có price == 0;
+        /**
+         * Khi chia và phân bổ giá thì có 2 trường hợp
+         * + Chia cho các combo-item có price != 0
+         * + Chia cho các combo-item có price == 0
+         * */
+        if (comboItems.stream().anyMatch(item -> item.getPrice() == null)) {
+            log.debug("combos with id {} has price item is null", variant.getId());
+        }
+        // các combo-item có price > 0
         var positivePriceLineItems = comboItems.stream().filter(item -> NumberUtils.isPositive(item.getPrice())).toList();
-        var zeroPriceLineItems = comboItems.stream().filter(item -> item.getPrice() != null && item.getPrice().compareTo(BigDecimal.ZERO) == 0).toList();
-        var positiveCount = positivePriceLineItems.size();
-        var zeroCount = zeroPriceLineItems.size();
+        // các combo-item có price = 0
+        var zeroPriceLineItems = comboItems.stream().filter(item -> !NumberUtils.isPositive(item.getPrice())).toList();
 
-        var appliedPrice = BigDecimal.ZERO;
+        int positiveCount = positivePriceLineItems.size();
+        int zeroCount = zeroPriceLineItems.size();
+        //NOTE: Tổng giá đã phân bổ về item
         List<CombinationCalculateResponse.LineItemComponent> components = new ArrayList<>();
-        var totalRemainder = BigDecimal.ZERO;
-        var minQuantity = lineItemQuantity.multiply(comboItems.get(0).getQuantity());
+        BigDecimal totalRemainder = BigDecimal.ZERO;
+        BigDecimal allocatedComboPrice = BigDecimal.ZERO;
+        BigDecimal minQuantity = positivePriceLineItems.get(0).getQuantity();
         for (int i = 0; i < positiveCount; i++) {
             var comboItem = positivePriceLineItems.get(i);
             var childProduct = productInfo.getProductMap().get(comboItem.getProductId());
-            var component = buildComboComponent(
+            var component = buildComponent(
                     comboItem,
                     childProduct,
                     originalComboPrice,
-                    lineItemQuantity,
                     lineItemPrice,
                     zeroCount,
-                    appliedPrice,
+                    allocatedComboPrice,
                     i == positiveCount - 1,
                     false,
                     productInfo.getCurrency()
             );
-            appliedPrice = appliedPrice.add(component.getLinePrice()).add(component.getRemainder());
             components.add(component);
-            if (minQuantity.compareTo(component.getQuantity()) > 0) minQuantity = component.getQuantity();
+            allocatedComboPrice = allocatedComboPrice.add(component.getLinePrice()).add(component.getRemainder());
             totalRemainder = totalRemainder.add(component.getRemainder());
+            if (component.getQuantity().compareTo(minQuantity) < 0) minQuantity = component.getQuantity();
         }
         for (int i = 0; i < zeroCount; i++) {
             var comboItem = zeroPriceLineItems.get(i);
             var childProduct = productInfo.getProductMap().get(comboItem.getProductId());
-            var component = buildComboComponent(
+            var component = buildComponent(
                     comboItem,
                     childProduct,
                     originalComboPrice,
-                    lineItemQuantity,
                     lineItemPrice,
                     zeroCount,
-                    appliedPrice,
+                    allocatedComboPrice,
                     i == zeroCount - 1,
                     zeroCount == comboItems.size(),
                     productInfo.getCurrency()
             );
-            appliedPrice = appliedPrice.add(component.getLinePrice()).add(component.getRemainder());
             components.add(component);
-            if (minQuantity.compareTo(component.getQuantity()) > 0) minQuantity = component.getQuantity();
+            allocatedComboPrice = allocatedComboPrice.add(component.getLinePrice()).add(component.getRemainder());
             totalRemainder = totalRemainder.add(component.getRemainder());
+            if (component.getQuantity().compareTo(minQuantity) < 0) minQuantity = component.getQuantity();
         }
 
-        // sort theo thứ tự giảm dần của remainder
-        var sortComponents = components.stream().sorted(Comparator.comparing(CombinationCalculateResponse.LineItemComponent::getRemainder).reversed()).toList();
-        var canBeOddComponent = addRemainder(totalRemainder, minQuantity, productInfo.getRemainderUnit(), sortComponents, productInfo.getCurrency());
-        handleDiscountAllocations(canBeOddComponent, components, sortComponents, discountAllocations, lineItemPrice, minQuantity, productInfo);
+        // Xử lý phần dư theo thứ tự giảm dần, xử lý các item có phần dư từ lớn đến nhỏ
+        var sortedComponents = components.stream()
+                .sorted(Comparator.comparing((CombinationCalculateResponse.LineItemComponent::getRemainder)).reversed())
+                .toList();
+        var canBeOddComponent = addRemainder(totalRemainder, minQuantity, productInfo.getRemainderUnit(), sortedComponents, productInfo.getCurrency());
+        handleDiscountAllocations(canBeOddComponent, components, sortedComponents, discountAllocations, lineItemPrice, minQuantity, productInfo);
         return components;
     }
 
     private void handleDiscountAllocations(
             CombinationCalculateResponse.LineItemComponent canBeOddComponent,
             List<CombinationCalculateResponse.LineItemComponent> components,
-            List<CombinationCalculateResponse.LineItemComponent> sortComponents,
+            List<CombinationCalculateResponse.LineItemComponent> sortedComponents,
             List<CombinationCalculateResponse.ComboPacksizeDiscountAllocation> discountAllocations,
             BigDecimal lineItemPrice,
             BigDecimal minQuantity,
-            CalculateProductInfo productInfo
-    ) {
+            CalculateProductInfo productInfo) {
         if (CollectionUtils.isEmpty(discountAllocations)) return;
+        var currency = productInfo.getCurrency();
         var componentCount = components.size();
-        var lastLineHasPriceIndex = componentCount - 1;
+        int lastLineHasPriceIndex = componentCount - 1; // default ??
         for (int i = componentCount - 1; i >= 0; i--) {
-            if (NumberUtils.isPositive(components.get(i).getLinePrice())) {
+            var component = components.get(i);
+            if (NumberUtils.isPositive(component.getPrice())) {
                 lastLineHasPriceIndex = i;
                 break;
             }
         }
-        var currency = productInfo.getCurrency();
-        // chỉ phân bổ discount về các line có price > 0;
-        for (var discountAllocation : discountAllocations) {
-            var appliedDiscountAmount = BigDecimal.ZERO;
+        for (var discount : discountAllocations) {
+            var allocatedAmount = BigDecimal.ZERO;
             var totalRemainder = BigDecimal.ZERO;
-            for (int i = 0; i < componentCount; i++) {
+            for (int i = 0; i < componentCount - 1; i++) {
                 var component = components.get(i);
-                var splitAmount = lastLineHasPriceIndex == i
-                        ? discountAllocation.getAmount().subtract(appliedDiscountAmount)
-                        : lineItemPrice.compareTo(BigDecimal.ZERO) <= 0 ? BigDecimal.ZERO
-                        : component.getLinePrice().multiply(discountAllocation.getAmount())
-                        .divide(lineItemPrice, currency.getDefaultFractionDigits(), RoundingMode.HALF_UP);
-                appliedDiscountAmount = appliedDiscountAmount.add(splitAmount);
-
-                var amount = splitAmount.min(component.getSubtotal())
+                // Giá được phân bổ về line
+                var splitPrice = i == componentCount - 1
+                        ? discount.getAmount().subtract(allocatedAmount)
+                        : discount.getAmount().multiply(component.getLinePrice()).divide(lineItemPrice, currency.getDefaultFractionDigits(), RoundingMode.HALF_UP);
+                allocatedAmount = allocatedAmount.add(splitPrice);
+                var amount = splitPrice.min(component.getSubtotal())
                         .divide(component.getQuantity(), currency.getDefaultFractionDigits(), RoundingMode.FLOOR)
                         .multiply(component.getQuantity());
-                var remainder = splitAmount.subtract(amount);
+                // Phần dư sau khi chia cho từng line
+                var remainder = splitPrice.subtract(amount);
                 totalRemainder = totalRemainder.add(remainder);
-                var allocation = discountAllocation.toBuilder()
+                var allocation = discount.toBuilder()
                         .amount(amount)
                         .remainder(remainder)
                         .build();
                 component.addDiscountAllocation(allocation);
+                // ?? Nếu có nhiều dícount phân bổ về component này thì sẽ sai(replace allocation trước đó)
                 component.setRemainderDiscountAllocation(allocation);
             }
-            var sortedComponentsByDiscountRemainder = components.stream()
-                    .sorted(Comparator.comparing((CombinationCalculateResponse.LineItemComponent lineItemComponent) ->
-                                    lineItemComponent.getRemainderDiscountAllocation().getAmount())
-                            .reversed())
+            // Sắp xếp theo chiều giảm dần của remainder trong remainderDiscount
+            var storedComponentByDiscountRemainder = components.stream()
+                    .sorted(Comparator.comparing(
+                            (CombinationCalculateResponse.LineItemComponent component)
+                                    -> component.getRemainderDiscountAllocation().getRemainder()).reversed())
                     .toList();
-            addRemainderForDiscountAllocations(canBeOddComponent, sortedComponentsByDiscountRemainder, sortComponents, totalRemainder, minQuantity, productInfo.getRemainderUnit());
+            reallocateAmountToComponents(canBeOddComponent, storedComponentByDiscountRemainder, sortedComponents, totalRemainder, minQuantity, productInfo);
         }
     }
 
-    private void addRemainderForDiscountAllocations(
+    private void reallocateAmountToComponents(
             CombinationCalculateResponse.LineItemComponent canBeOddComponent,
-            List<CombinationCalculateResponse.LineItemComponent> sortedComponentsByDiscountRemainder,
-            List<CombinationCalculateResponse.LineItemComponent> sortComponents,
+            List<CombinationCalculateResponse.LineItemComponent> storedComponentByDiscountRemainder,
+            List<CombinationCalculateResponse.LineItemComponent> sortedComponents,
             BigDecimal totalRemainder,
             BigDecimal minQuantity,
-            BigDecimal remainderUnit
+            CalculateProductInfo productInfo
     ) {
         if (totalRemainder.compareTo(BigDecimal.ZERO) <= 0) return;
 
-        for (var component : sortedComponentsByDiscountRemainder) {
+        //NOTE: Quy tắc: thêm vào 1 lượng = remainderUnit * quantity
+        // phân bổ lại lần lượt cho component có remainder lớn -> nhỏ
+        var remainderUnit = productInfo.getRemainderUnit();
+        for (var component : storedComponentByDiscountRemainder) {
             var discountAllocation = component.getRemainderDiscountAllocation();
             var addPrice = component.getQuantity().multiply(remainderUnit);
-            var newSubtotal = component.getSubtotal().subtract(addPrice);
-            if (addPrice.compareTo(totalRemainder) <= 0 && newSubtotal.compareTo(BigDecimal.ZERO) >= 0) {
+            if (addPrice.compareTo(totalRemainder) <= 0) {
+                var newSubtotal = component.getSubtotal().subtract(addPrice);
                 discountAllocation.addAmount(addPrice);
                 totalRemainder = totalRemainder.subtract(addPrice);
                 component.setSubtotal(newSubtotal);
             }
             if (totalRemainder.compareTo(BigDecimal.ZERO) <= 0)
                 return;
-            if (totalRemainder.compareTo(minQuantity.multiply(remainderUnit)) < 0) break;
+            if (totalRemainder.compareTo(minQuantity.multiply(remainderUnit)) <= 0) break;
         }
 
         var oddComponentDiscount = canBeOddComponent.getRemainderDiscountAllocation();
-        var addPrice = totalRemainder.min(canBeOddComponent.getSubtotal());
-        oddComponentDiscount.addAmount(addPrice);
-        totalRemainder = totalRemainder.subtract(addPrice);
-        canBeOddComponent.setSubtotal(canBeOddComponent.getSubtotal().subtract(addPrice));
+        var aPrice = totalRemainder.min(canBeOddComponent.getSubtotal());
+        oddComponentDiscount.addAmount(aPrice);
+        totalRemainder = totalRemainder.subtract(aPrice);
+        canBeOddComponent.setSubtotal(canBeOddComponent.getSubtotal().subtract(aPrice));
 
         if (totalRemainder.compareTo(BigDecimal.ZERO) > 0) {
-            for (var component : sortComponents) {
+            for (var component : sortedComponents) {
                 var discountAllocation = component.getRemainderDiscountAllocation();
-                var addPriceFinal = component.getSubtotal().min(totalRemainder);
-                var newSubtotal = component.getSubtotal().subtract(addPriceFinal);
-                discountAllocation.addAmount(addPriceFinal);
+                var addPrice = component.getSubtotal().min(totalRemainder);
+                var newSubtotal = component.getSubtotal().subtract(addPrice);
+                discountAllocation.addAmount(addPrice);
                 component.setSubtotal(newSubtotal);
                 totalRemainder = totalRemainder.subtract(addPrice);
-                if (totalRemainder.compareTo(BigDecimal.ZERO) <= 0) return;
+                if (totalRemainder.compareTo(BigDecimal.ZERO) <= 0)
+                    return;
             }
         }
     }
-
 
     private CombinationCalculateResponse.LineItemComponent addRemainder(
             BigDecimal totalRemainder,
@@ -406,7 +386,7 @@ public class CombinationCalculateService {
     ) {
         if (totalRemainder.compareTo(BigDecimal.ZERO) <= 0) return components.get(0);
         for (var component : components) {
-            var addPrice = component.getQuantity().multiply(remainderUnit);
+            var addPrice = component.getQuantity().multiply(remainderUnit); // áp theo 1 qui tắc nào đó
             if (addPrice.compareTo(totalRemainder) <= 0) {
                 component.setLinePrice(component.getLinePrice().add(addPrice));
                 component.setPrice(component.getPrice().add(remainderUnit));
@@ -430,24 +410,24 @@ public class CombinationCalculateService {
                 }
             }
         }
+
         var canBeOddComponent = components.get(0);
         canBeOddComponent.setCanBeOdd(true);
         return canBeOddComponent;
     }
 
-    private CombinationCalculateResponse.LineItemComponent buildComboComponent(
+    private CombinationCalculateResponse.LineItemComponent buildComponent(
             ComboItem comboItem,
             Product childProduct,
             BigDecimal originalComboPrice,
-            BigDecimal lineItemQuantity,
             BigDecimal lineItemPrice,
             int zeroCount,
-            BigDecimal appliedPrice,
-            boolean isLastIndex,
-            boolean isAvgSlit,
+            BigDecimal allocatedComboPrice,
+            boolean isLastLine,
+            boolean isAvgSplit,
             Currency currency
     ) {
-        var componentQuantity = comboItem.getQuantity().multiply(lineItemQuantity);
+        var comboItemQuantity = comboItem.getQuantity();
         var componentBuilder = CombinationCalculateResponse.LineItemComponent.builder()
                 .variantId(comboItem.getVariantId())
                 .sku(comboItem.getSku())
@@ -459,146 +439,176 @@ public class CombinationCalculateService {
                 .inventoryPolicy(comboItem.getInventoryPolicy())
                 .inventoryItemId(comboItem.getInventoryItemId() == null ? null : comboItem.getInventoryItemId().longValue())
                 .vendor(childProduct.getVendor())
-                .productId(comboItem.getProductId())
-                .quantity(componentQuantity)
+                .productId(childProduct.getId())
                 .type(VariantType.combo)
-                .baseQuantity(comboItem.getQuantity())
+                .baseQuantity(comboItemQuantity)
                 .requireShipping(comboItem.isRequiresShipping())
                 .unit(comboItem.getUnit());
-        if (!isLastIndex) {
-            // NOTE: Phân bổ giá về 1 thành phần
-            var splitPrice = isAvgSlit || originalComboPrice.compareTo(BigDecimal.ZERO) <= 0
+        if (!isLastLine) {
+            var splitPrice = isAvgSplit || originalComboPrice.compareTo(BigDecimal.ZERO) == 0
                     ? lineItemPrice.divide(BigDecimal.valueOf(zeroCount), currency.getDefaultFractionDigits(), RoundingMode.HALF_UP)
                     : comboItem.getPrice().multiply(comboItem.getQuantity()).multiply(lineItemPrice).divide(originalComboPrice, currency.getDefaultFractionDigits(), RoundingMode.HALF_UP);
-            // Giá của 1 quantity trong thành phần đó
-            var unitComponentPrice = splitPrice.divide(componentQuantity, currency.getDefaultFractionDigits(), RoundingMode.FLOOR);
-            // Giá của line gốc
-            var componentLinePrice = unitComponentPrice.multiply(componentQuantity);
-            // Phần dư khi chia
+            // Giá của 1 quantity
+            var unitPrice = splitPrice.divide(comboItem.getQuantity(), currency.getDefaultFractionDigits(), RoundingMode.FLOOR);
+            // Tổng giá của line thành phần
+            var componentLinePrice = unitPrice.multiply(comboItem.getQuantity());
+            // phần dư khi chia
             var remainder = splitPrice.subtract(componentLinePrice);
-
             return componentBuilder
                     .linePrice(componentLinePrice)
                     .subtotal(componentLinePrice)
-                    .price(unitComponentPrice)
+                    .price(unitPrice)
                     .remainder(remainder)
                     .build();
         }
-        // Xử lý line cuối
-        var splitPrice = lineItemPrice.subtract(appliedPrice);
-        var unitComponentPrice = splitPrice.divide(componentQuantity, currency.getDefaultFractionDigits(), RoundingMode.FLOOR);
-        var componentLinePrice = unitComponentPrice.multiply(componentQuantity);
+
+        //Nếu là line cuối
+        var splitPrice = lineItemPrice.subtract(allocatedComboPrice);
+        var unitPrice = splitPrice.divide(comboItemQuantity, currency.getDefaultFractionDigits(), RoundingMode.FLOOR);
+        var componentLinePrice = unitPrice.multiply(comboItemQuantity);
         var remainder = splitPrice.subtract(componentLinePrice);
         return componentBuilder
-                .linePrice(componentLinePrice)
+                .price(unitPrice)
                 .subtotal(componentLinePrice)
-                .price(unitComponentPrice)
+                .linePrice(componentLinePrice)
                 .remainder(remainder)
+                .build();
+    }
+
+    /**
+     * Note: Thông tin sản phẩm thì lấy theo input
+     */
+    private CombinationCalculateResponse calculateWithoutUpdateProductInfo(CombinationCalculateRequest request, CalculateProductInfo productInfo) {
+        var lineItems = new ArrayList<CombinationCalculateResponse.LineItem>();
+        for (var lineItem : request.getLineItems()) {
+            var lineItemResponse = combinationMapper.toResponse(lineItem);
+            var components = lineItemResponse.getComponents();
+            if (CollectionUtils.isNotEmpty(components)) {
+                var lineItemPrice = lineItemResponse.getLinePrice();
+                var minQuantity = components.stream()
+                        .map(CombinationCalculateResponse.LineItemComponent::getQuantity)
+                        .min(Comparator.naturalOrder())
+                        .orElse(productInfo.getRemainderUnit());
+                for (var component : components) {
+                    component.setSubtotal(component.getLinePrice());
+                }
+                var canBeOddComponent = components.stream().filter(CombinationCalculateResponse.LineItemComponent::isChanged).findFirst().orElse(components.get(0));
+                var sortedComponents = components.stream().sorted(Comparator.comparing(CombinationCalculateResponse.LineItemComponent::getRemainder)).toList();
+                handleDiscountAllocations(canBeOddComponent, components, sortedComponents, lineItem.getDiscountAllocations(), lineItemPrice, minQuantity, productInfo);
+            }
+            if (request.isCalculateTax()) {
+                handleTaxLines(lineItemResponse, productInfo.getCountryTaxSetting(), productInfo.getCurrency(), request.isTaxIncluded(), request.isTaxExempt(), productInfo);
+            }
+            lineItems.add(lineItemResponse);
+        }
+        return CombinationCalculateResponse.builder()
+                .lineItems(lineItems)
                 .build();
     }
 
     private CalculateProductInfo getProductInfo(Integer storeId, CombinationCalculateRequest request) {
         var productInfo = CalculateProductInfo.builder();
         var baseVariantIds = request.getLineItems().stream()
-                .filter(Objects::nonNull)
                 .map(CombinationCalculateRequest.LineItem::getVariantId)
-                .distinct()
-                .toList();
-        if (CollectionUtils.isEmpty(baseVariantIds)) {
-            return productInfo.build();
-        }
+                .filter(NumberUtils::isPositive)
+                .distinct().toList();
+        if (CollectionUtils.isEmpty(baseVariantIds)) return productInfo.build();
 
         var baseVariants = sapoClient.productVariantFilter(storeId, baseVariantIds);
-        // get product
+        var variantMap = baseVariants.stream()
+                .collect(Collectors.toMap(ProductVariant::getId, Function.identity()));
         var allProductIds = baseVariants.stream()
                 .map(ProductVariant::getProductId)
                 .distinct()
                 .collect(Collectors.toList());
-        var variantMap = baseVariants.stream()
-                .collect(Collectors.toMap(ProductVariant::getId, Function.identity()));
-        var comboIds = baseVariants.stream()
+
+        var comboVariantIds = baseVariants.stream()
                 .filter(variant -> variant.getType() == VariantType.combo)
                 .map(ProductVariant::getId)
-                .distinct().toList();
+                .toList();
         var packsizeIds = baseVariants.stream()
                 .filter(variant -> variant.getType() == VariantType.packsize)
                 .map(ProductVariant::getId)
-                .distinct().toList();
-
-        if (CollectionUtils.isNotEmpty(comboIds)) {
-            var combos = sapoClient.comboFilter(storeId, comboIds);
+                .toList();
+        if (CollectionUtils.isNotEmpty(comboVariantIds)) {
+            var combos = sapoClient.comboFilter(storeId, comboVariantIds);
             productInfo.comboMap(combos.stream().collect(Collectors.toMap(Combo::getVariantId, Function.identity())));
-            Map<Integer, ProductVariant> comboVariantMap = new HashMap<>();
-            combos.stream().flatMap(com -> com.getComboItems().stream())
-                    .forEach(item -> comboVariantMap.putIfAbsent(item.getVariantId(), combinationMapper.toResponse(item)));
-            variantMap.putAll(comboVariantMap);
-            allProductIds.addAll(
-                    comboVariantMap.values().stream()
-                            .map(ProductVariant::getProductId)
-                            .filter(NumberUtils::isPositive)
-                            .distinct()
-                            .toList());
-        }
 
+            combos.stream()
+                    .flatMap(combo -> combo.getComboItems().stream())
+                    .forEach(item -> {
+                        allProductIds.add(item.getProductId());
+                        variantMap.putIfAbsent(item.getVariantId(), combinationMapper.toResponse(item));
+                    });
+        }
         if (CollectionUtils.isNotEmpty(packsizeIds)) {
             var packsizes = sapoClient.packsizeFilterByVariantIds(storeId, packsizeIds);
-            var packsizeVariantIds = packsizes.stream().map(Packsize::getVariantId).distinct().toList();
-            var packsizeVariants = sapoClient.productVariantFilter(storeId, packsizeVariantIds).stream()
+            productInfo.packsizeMap(packsizes.stream().collect(Collectors.toMap(Packsize::getVariantId, Function.identity())));
+            var packsizeVariantIds = packsizes.stream()
+                    .map(Packsize::getPacksizeVariantId)
+                    .distinct().toList();
+            var packsizeVariantMap = sapoClient.productVariantFilter(storeId, packsizeVariantIds).stream()
                     .collect(Collectors.toMap(ProductVariant::getId, Function.identity()));
-            variantMap.putAll(packsizeVariants);
-            productInfo.packsizeMap(packsizes.stream().collect(Collectors.toMap(Packsize::getPacksizeVariantId, Function.identity())));
-            allProductIds.addAll(packsizes.stream().map(Packsize::getProductId).toList());
+            variantMap.putAll(packsizeVariantMap);
+            allProductIds.addAll(packsizeVariantMap.values().stream().map(ProductVariant::getProductId).distinct().toList());
         }
 
-        var productMap = sapoClient.productFilter(storeId, allProductIds)
-                .stream().collect(Collectors.toMap(Product::getId, Function.identity()));
-        var currency = Currency.getInstance(request.getCurrency());
-        var remainderUnit = BigDecimal.ONE.movePointLeft(currency.getDefaultFractionDigits());
+        var productMap = sapoClient.productFilter(storeId, allProductIds).stream()
+                .collect(Collectors.toMap(Product::getId, Function.identity()));
+        var currency = StringUtils.isNotBlank(request.getCurrency()) ? Currency.getInstance(request.getCurrency()) : Currency.getInstance("VND");
+        var remainderUnit = BigDecimal.ONE.movePointLeft(2);
+
         if (request.isCalculateTax()) {
-            Set<Integer> productIds = new HashSet<>(productMap.keySet());
+            Set<Integer> productIds = productMap.keySet();
             productIds.add(0);
             var taxSetting = taxHelper.getTaxSetting(storeId, request.getCountryCode(), productIds);
-            var productTaxes = taxSetting.getTaxes().stream()
-                    .filter(item -> NumberUtils.isPositive(item.getProductId()))
-                    .collect(Collectors.toMap(TaxSettingValue::getProductId, Function.identity(), (first, second) -> second));
             var countryTax = taxSetting.getTaxes().stream()
-                    .filter(item -> item.getProductId() == null)
-                    .findFirst().orElse(TaxSettingValue.builder().rate(BigDecimal.ZERO).build());
-            productInfo.productTaxMap(productTaxes)
+                    .filter(tax -> !NumberUtils.isPositive(tax.getProductId()))
+                    .findFirst()
+                    .orElse(TaxSettingValue.builder().rate(BigDecimal.ZERO).build());
+
+            var taxMap = taxSetting.getTaxes().stream()
+                    .collect(Collectors.toMap(
+                            TaxSettingValue::getProductId,
+                            Function.identity(),
+                            (first, second) -> second));
+            productInfo
+                    .productTaxMap(taxMap)
                     .countryTaxSetting(countryTax);
         }
 
         return productInfo
+                .productMap(productMap)
+                .variantMap(variantMap)
                 .currency(currency)
                 .remainderUnit(remainderUnit)
-                .variantMap(variantMap)
-                .productMap(productMap)
                 .build();
     }
 
     private void validateRequest(CombinationCalculateRequest request) {
-        var errors = new ArrayList<UserError>();
+        List<UserError> userErrors = new ArrayList<>();
         for (int i = 0; i < request.getLineItems().size(); i++) {
             var lineItem = request.getLineItems().get(i);
             if (!NumberUtils.isPositive(lineItem.getVariantId())
                     && (lineItem.getPrice() == null || lineItem.getPrice().signum() < 0)) {
-                errors.add(UserError.builder()
-                        .code("line_item[%s].price".formatted(i))
+                userErrors.add(UserError.builder()
+                        .code("line_items[%s].price".formatted(i))
                         .message("price must be greater than or equal to 0")
+                        .fields(List.of("line_item", String.valueOf(lineItem.getPrice()), "price"))
                         .build());
             }
             if (!request.isUpdateProductInfo()
                     && (CollectionUtils.isNotEmpty(lineItem.getComponents()) && lineItem.getType() == VariantType.normal)) {
-                errors.add(UserError.builder()
-                        .code("line_item[%s].type".formatted(i))
+                userErrors.add(UserError.builder()
+                        .code("line_items[%s].type".formatted(i))
                         .message("type must be combo or packsize")
                         .fields(List.of("line_item", String.valueOf(i), "type"))
                         .build());
             }
         }
-        if (CollectionUtils.isNotEmpty(errors)) {
+        if (CollectionUtils.isNotEmpty(userErrors)) {
             var errorMessageBuilder = ErrorMessage.builder();
-            for (var error : errors) {
+            for (var error : userErrors) {
                 errorMessageBuilder.addError(error);
             }
             throw new ConstrainViolationException(errorMessageBuilder.build());

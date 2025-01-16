@@ -4,6 +4,7 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.Setter;
 import org.example.order.order.application.model.draftorder.request.CombinationCalculateRequest;
+import org.example.order.order.application.service.orderedit.GenericTaxLine;
 import org.example.order.order.domain.draftorder.model.VariantType;
 import org.example.order.order.domain.order.model.Order;
 
@@ -101,7 +102,8 @@ public class CombinationCalculateResponse {
         }
 
         public void addTaxLine(ComboPacksizeTaxLine customTaxLine) {
-
+            if (this.taxLines == null) taxLines = new ArrayList<>();
+            taxLines.add(customTaxLine);
         }
     }
 
@@ -121,12 +123,24 @@ public class CombinationCalculateResponse {
 
     @Getter
     @Setter
-    @Builder
-    public static class ComboPacksizeTaxLine {
+    @Builder(toBuilder = true)
+    public static class ComboPacksizeTaxLine implements GenericTaxLine {
         private BigDecimal rate;
         private BigDecimal price;
         private String title;
         @Builder.Default
         private boolean custom = false;
+
+        public ComboPacksizeTaxLine(MergedTaxLine mergedTaxLine) {
+            this.rate = mergedTaxLine.getRate();
+            this.price = mergedTaxLine.getPrice();
+            this.title = mergedTaxLine.getTitle();
+            this.custom = mergedTaxLine.isCustom();
+        }
+
+        @Override
+        public int getQuantity() {
+            return 0;
+        }
     }
 }
